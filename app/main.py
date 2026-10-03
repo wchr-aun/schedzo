@@ -17,6 +17,7 @@ from app.observability import configure_logging, get_logger
 from app.rate_limit import RequestRateLimiter
 from app.request_bounds import RequestBoundsMiddleware
 from app.routers import health, monzo, resources, tasks
+from app.services.monzo import monzo_client_scope
 from app.services.disconnection import retry_pending_disconnections
 from app.services.maintenance import prune_history
 from app.services.scheduler import restore_scheduled_transfers
@@ -66,42 +67,44 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
                 b"\0" * 32,
             }:
                 raise RuntimeError("Production encryption key must not be a test key")
-        database_engine = engine or create_database_engine(settings.database_url)
-        session_factory = create_session_factory(database_engine)
-        scheduler = BackgroundScheduler(timezone="UTC")
-        prune_history(session_factory)
-        scheduler.add_job(
-            prune_history,
-            "interval",
-            hours=1,
-            args=[session_factory],
-            id="prune-history",
-            max_instances=1,
-        )
-        restore_scheduled_transfers(scheduler, session_factory, settings)
-        scheduler.add_job(
-            retry_pending_disconnections,
-            "interval",
-            minutes=1,
-            args=[session_factory, settings],
-            id="retry-disconnections",
-            max_instances=1,
-        )
-        scheduler.start()
-        application.state.scheduler = scheduler
-        application.state.settings = settings
-        application.state.database_engine = database_engine
-        application.state.session_factory = session_factory
-        application.state.oauth_start_rate_limiter = RequestRateLimiter(
-            max_requests=5, window_seconds=600
-        )
-        application.state.request_rate_limiter = RequestRateLimiter()
-        try:
-            yield
-        finally:
-            scheduler.shutdown(wait=False)
-            if engine is None:
-                database_engine.dispose()
+        async with monzo_client_scope() as monzo_client:
+            database_engine = engine or create_database_engine(settings.database_url)
+            session_factory = create_session_factory(database_engine)
+            scheduler = BackgroundScheduler(timezone="UTC")
+            prune_history(session_factory)
+            scheduler.add_job(
+                prune_history,
+                "interval",
+                hours=1,
+                args=[session_factory],
+                id="prune-history",
+                max_instances=1,
+            )
+            restore_scheduled_transfers(scheduler, session_factory, settings)
+            scheduler.add_job(
+                retry_pending_disconnections,
+                "interval",
+                minutes=1,
+                args=[session_factory, settings],
+                id="retry-disconnections",
+                max_instances=1,
+            )
+            scheduler.start()
+            application.state.monzo_client = monzo_client
+            application.state.scheduler = scheduler
+            application.state.settings = settings
+            application.state.database_engine = database_engine
+            application.state.session_factory = session_factory
+            application.state.oauth_start_rate_limiter = RequestRateLimiter(
+                max_requests=5, window_seconds=600
+            )
+            application.state.request_rate_limiter = RequestRateLimiter()
+            try:
+                yield
+            finally:
+                scheduler.shutdown(wait=False)
+                if engine is None:
+                    database_engine.dispose()
 
     application = FastAPI(
         title="Schedzo",

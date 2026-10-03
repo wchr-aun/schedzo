@@ -11,7 +11,7 @@ from app.domain.recurrence import Recurrence, next_occurrence
 from app.domain.transfers import TransferExecution, TransferInterval, TransferType
 from app.observability import monzo_error_details
 from app.services.authorization import resolve_monzo_access_token
-from app.services.monzo import deposit_into_pot, withdraw_from_pot
+from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.notifications import notify_transfer_result, pot_name
 from app.services.scheduler import add_transfer_job, remove_job_if_present
 from app.services.user_locks import user_execution_lock
@@ -81,6 +81,19 @@ async def _execute_scheduled_transfer(
     session_factory: SessionFactory,
     settings: Settings,
 ) -> None:
+    async with monzo_client_scope() as client:
+        await _execute_with_client(
+            transfer_id, scheduler, session_factory, settings, client
+        )
+
+
+async def _execute_with_client(
+    transfer_id: str,
+    scheduler: BackgroundScheduler,
+    session_factory: SessionFactory,
+    settings: Settings,
+    client: MonzoClient,
+) -> None:
     values = _load_pending_execution(transfer_id, session_factory)
     if values is None:
         return
@@ -88,10 +101,10 @@ async def _execute_scheduled_transfer(
     access_token: str | None = None
     try:
         access_token = await resolve_monzo_access_token(
-            values.user_id, session_factory, settings
+            values.user_id, session_factory, settings, client=client
         )
         if values.transfer_type == TransferType.DEPOSIT.value:
-            response = await deposit_into_pot(
+            response = await client.deposit_into_pot(
                 access_token,
                 values.pot_id,
                 values.account_id,
@@ -99,7 +112,7 @@ async def _execute_scheduled_transfer(
                 transfer_id,
             )
         else:
-            response = await withdraw_from_pot(
+            response = await client.withdraw_from_pot(
                 access_token,
                 values.pot_id,
                 values.account_id,
@@ -128,6 +141,7 @@ async def _execute_scheduled_transfer(
         )
         if access_token is not None:
             await notify_transfer_result(
+                client,
                 access_token,
                 values,
                 transfer_id,
@@ -143,6 +157,7 @@ async def _execute_scheduled_transfer(
         settings,
     )
     await notify_transfer_result(
+        client,
         access_token,
         values,
         transfer_id,

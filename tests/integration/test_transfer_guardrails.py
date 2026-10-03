@@ -65,9 +65,9 @@ def test_execution_has_no_application_monetary_budget(client, settings, monkeypa
             ),
         )
     )
-    monkeypatch.setattr("app.services.transfer_execution.withdraw_from_pot", withdrawal)
+    monkeypatch.setattr("app.services.monzo.MonzoClient.withdraw_from_pot", withdrawal)
     monkeypatch.setattr(
-        "app.services.notifications.create_feed_item",
+        "app.services.monzo.MonzoClient.create_feed_item",
         AsyncMock(
             return_value=httpx.Response(
                 200,

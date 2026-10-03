@@ -11,10 +11,19 @@ from app.config import Settings
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext, MonzoSession
 from app.observability import get_logger
+from app.rate_limit import RequestRateLimiter
 from app.services.authorization import (
-    MonzoConnectionError, MonzoTokenResponseError, SessionAuthenticationError,
-    TokenStorageError, decode_app_session_id, decode_user_id, resolve_monzo_access_token,
+    MonzoConnectionError,
+    MonzoTokenResponseError,
+    SessionAuthenticationError,
+    TokenStorageError,
+    decode_app_session_id,
+    decode_user_id,
+    resolve_monzo_access_token,
 )
+from app.services.monzo import MonzoClient
+from app.services.oauth import OAuthService
+from app.services.resources import ResourceService
 
 logger = get_logger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -30,6 +39,28 @@ def get_session_factory(request: Request) -> SessionFactory:
 
 def get_scheduler(request: Request) -> BackgroundScheduler:
     return request.app.state.scheduler
+
+
+def _get_monzo_client(request: Request) -> MonzoClient:
+    return request.app.state.monzo_client
+
+
+def get_resource_service(
+    client: MonzoClient = Depends(_get_monzo_client),
+) -> ResourceService:
+    return ResourceService(client)
+
+
+def get_oauth_service(
+    client: MonzoClient = Depends(_get_monzo_client),
+    session_factory: SessionFactory = Depends(get_session_factory),
+    settings: Settings = Depends(get_settings),
+) -> OAuthService:
+    return OAuthService(client, session_factory, settings)
+
+
+def get_oauth_start_rate_limiter(request: Request) -> RequestRateLimiter:
+    return request.app.state.oauth_start_rate_limiter
 
 
 def authenticated_session(
@@ -75,12 +106,14 @@ async def monzo_session(
     authentication: AuthenticationContext = Depends(authenticated_session),
     settings: Settings = Depends(get_settings),
     session_factory: SessionFactory = Depends(get_session_factory),
+    client: MonzoClient = Depends(_get_monzo_client),
 ) -> MonzoSession:
     try:
         access_token = await resolve_monzo_access_token(
             authentication.user_id,
             session_factory,
             settings,
+            client=client,
         )
         return MonzoSession(
             user_id=authentication.user_id,

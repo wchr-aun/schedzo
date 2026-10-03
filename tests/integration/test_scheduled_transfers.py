@@ -16,7 +16,7 @@ from app.db.models import (
 from app.domain.time import UK_TIMEZONE
 from app.services.transfer_execution import execute_scheduled_transfer
 from app.services.token_store import encrypt_token
-from app.services.monzo import deposit_into_pot
+from app.services.monzo import MonzoClient, monzo_client_scope
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -34,8 +34,12 @@ def _save_credential(client):
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token=encrypt_token("test-access-token", client.app.state.settings),
-                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
+                access_token=encrypt_token(
+                    "test-access-token", client.app.state.settings
+                ),
+                refresh_token=encrypt_token(
+                    "test-refresh-token", client.app.state.settings
+                ),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
                 updated_at=now,
@@ -44,9 +48,7 @@ def _save_credential(client):
         session.commit()
 
 
-def test_schedule_transfer_endpoint_persists_authenticated_users_task(
-    client, settings
-):
+def test_schedule_transfer_endpoint_persists_authenticated_users_task(client, settings):
     _save_credential(client)
     scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
         second=0, microsecond=0
@@ -98,7 +100,9 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
-def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, settings):
+def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(
+    client, settings
+):
     _save_credential(client)
     token = _session_token(settings)
     headers = {"Authorization": f"Bearer {token}"}
@@ -200,11 +204,14 @@ def test_schedule_endpoint_rejects_pot_ids_that_can_change_api_path(
 
 def test_monzo_deposit_rejects_legacy_traversal_ids_before_request():
     with pytest.raises(ValueError, match="Invalid Monzo resource identifier"):
-        asyncio.run(
-            deposit_into_pot(
-                "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
-            )
-        )
+
+        async def deposit():
+            async with monzo_client_scope() as client:
+                await client.deposit_into_pot(
+                    "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
+                )
+
+        asyncio.run(deposit())
 
 
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
@@ -216,7 +223,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
         session.add(
             MonzoCredential(
                 user_id="another-user",
-                access_token=encrypt_token("another-access-token", client.app.state.settings),
+                access_token=encrypt_token(
+                    "another-access-token", client.app.state.settings
+                ),
                 refresh_token=None,
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
@@ -409,9 +418,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     assert resource_filtered_response.status_code == 200
     resource_filtered_body = resource_filtered_response.json()
     assert resource_filtered_body["total"] == 1
-    assert [
-        item["transfer_id"] for item in resource_filtered_body["items"]
-    ] == ["own-transfer"]
+    assert [item["transfer_id"] for item in resource_filtered_body["items"]] == [
+        "own-transfer"
+    ]
 
     combined_filtered_response = client.get(
         "/scheduled-transfers",
@@ -426,9 +435,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     assert combined_filtered_response.status_code == 200
     combined_filtered_body = combined_filtered_response.json()
     assert combined_filtered_body["total"] == 1
-    assert [
-        item["transfer_id"] for item in combined_filtered_body["items"]
-    ] == ["inactive-transfer"]
+    assert [item["transfer_id"] for item in combined_filtered_body["items"]] == [
+        "inactive-transfer"
+    ]
 
 
 def test_get_scheduled_transfers_requires_authentication(client):
@@ -546,9 +555,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         assert [item.status for item in transfers].count("pending") == 1
 
 
-def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
-    client, settings
-):
+def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(client, settings):
     _save_credential(client)
     scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
         second=0, microsecond=0
@@ -584,9 +591,7 @@ def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
         assert transfer.executed_at is None
 
 
-def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
-    client, settings
-):
+def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(client, settings):
     _save_credential(client)
     setup_id = "setup-failed"
     transfer_id = "transfer-failed"
@@ -689,10 +694,14 @@ def test_three_executions_leave_three_completed_and_one_pending(client, settings
         )
         for _ in range(3):
             with client.app.state.session_factory() as session:
-                pending = session.query(ScheduledTransfer).filter_by(
-                    setup_id=setup_id,
-                    status="pending",
-                ).one()
+                pending = (
+                    session.query(ScheduledTransfer)
+                    .filter_by(
+                        setup_id=setup_id,
+                        status="pending",
+                    )
+                    .one()
+                )
                 transfer_id = pending.transfer_id
             execute_scheduled_transfer(
                 transfer_id,

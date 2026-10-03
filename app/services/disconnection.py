@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.db.models import MonzoCredential
 from app.observability import get_logger
 from app.services.authorization import monzo_refresh_lock
-from app.services.monzo import refresh_access_token, revoke_access
+from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.token_store import encrypt_token, decrypt_token
 from app.services.user_locks import user_execution_lock
 
@@ -28,6 +28,11 @@ def retry_monzo_disconnection(user_id, session_factory, settings):
 
 
 async def _revoke(user_id, session_factory, settings):
+    async with monzo_client_scope() as client:
+        await _revoke_with_client(user_id, session_factory, settings, client)
+
+
+async def _revoke_with_client(user_id, session_factory, settings, client: MonzoClient):
     with session_factory() as session:
         credential = session.get(MonzoCredential, user_id)
         if credential is None or not credential.revocation_pending:
@@ -42,7 +47,7 @@ async def _revoke(user_id, session_factory, settings):
         if not settings.monzo_client_id or not settings.monzo_client_secret:
             raise RuntimeError("Monzo OAuth is not configured")
         try:
-            result = await refresh_access_token(refresh, settings)
+            result = await client.refresh_access_token(refresh, settings)
         except httpx.HTTPStatusError as exc:
             try:
                 invalid_grant = (
@@ -71,14 +76,14 @@ async def _revoke(user_id, session_factory, settings):
     if expired and refresh:
         access = await renew() or access
     try:
-        await revoke_access(access)
+        await client.revoke_access(access)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 401:
             raise
         if refresh:
             renewed = await renew()
             if renewed is not None:
-                await revoke_access(renewed)
+                await client.revoke_access(renewed)
         # Without a refresh credential, a rejected access token has no further
         # stored capability. With refresh, require confirmed provider revocation.
     with session_factory() as session:

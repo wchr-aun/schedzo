@@ -14,7 +14,7 @@ from app.config import Settings
 from app.db.models import AppSession, MonzoCredential, UsedAppRefreshToken
 from app.services.user_locks import user_execution_lock
 from app.services.refresh_replay import refresh_replay_cache
-from app.schemas.monzo import MonzoTokenResponse
+from app.domain.monzo import MonzoTokenResponse
 
 APP_REFRESH_TOKEN_TTL = timedelta(days=60)
 MAX_APP_SESSIONS_PER_USER_PER_DAY = 20

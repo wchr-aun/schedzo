@@ -485,7 +485,7 @@ def test_concurrent_expired_token_requests_refresh_once(client, settings, monkey
     _save_credential(client, expired=True)
     calls = 0
 
-    async def refresh(refresh_token, configured_settings):
+    async def refresh(self, refresh_token, configured_settings):
         nonlocal calls
         calls += 1
         await asyncio.sleep(0.01)
@@ -496,7 +496,7 @@ def test_concurrent_expired_token_requests_refresh_once(client, settings, monkey
             expires_in=3600,
         )
 
-    monkeypatch.setattr("app.services.authorization.refresh_access_token", refresh)
+    monkeypatch.setattr("app.services.monzo.MonzoClient.refresh_access_token", refresh)
     async def resolve_twice():
         return await asyncio.gather(
             resolve_monzo_access_token(

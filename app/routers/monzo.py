@@ -2,26 +2,31 @@ import logging
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Settings
+from app.db.session import SessionFactory
+from app.dependencies import (
+    get_oauth_service,
+    get_oauth_start_rate_limiter,
+    get_session_factory,
+    get_settings,
+)
 from app.observability import monzo_error_details
-from app.schemas.monzo import AppRefreshRequest, MonzoTokenResponse
-from app.services.monzo import exchange_authorization_code
+from app.rate_limit import RequestRateLimiter
+from app.schemas.monzo import AppRefreshRequest
+from app.services.oauth import OAuthService, OAuthTokenResponseError
+from app.services.oauth_state import (
+    consume_oauth_state,
+    create_oauth_state,
+)
 from app.services.token_store import (
-    AppTokenPair,
     AppSessionQuotaError,
+    AppTokenPair,
     MonzoDisconnectPendingError,
     rotate_app_refresh_token,
-    save_monzo_tokens,
-)
-
-from app.services.oauth_state import (
-    create_oauth_state,
-    consume_oauth_state,
 )
 
 router = APIRouter(tags=["monzo"])
@@ -40,14 +45,17 @@ def _token_pair_response(
 
 
 @router.get("/monzo-redirect")
-def monzo_redirect(request: Request):
-    settings = request.app.state.settings
+def monzo_redirect(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    rate_limiter: RequestRateLimiter = Depends(get_oauth_start_rate_limiter),
+):
     if not settings.monzo_client_id:
         logger.error("oauth_redirect_failed reason=oauth_not_configured")
         raise HTTPException(status_code=503, detail="Monzo OAuth is not configured")
 
     client_host = request.client.host if request.client is not None else "unknown"
-    if not request.app.state.oauth_start_rate_limiter.allow(client_host):
+    if not rate_limiter.allow(client_host):
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts",
@@ -77,14 +85,20 @@ def monzo_redirect(request: Request):
 
 
 @router.get("/monzo-callback")
-async def monzo_callback(request: Request, code: str, state: str):
-    settings = request.app.state.settings
+async def monzo_callback(
+    request: Request,
+    code: str,
+    state: str,
+    service: OAuthService = Depends(get_oauth_service),
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
+):
     try:
         valid_state = consume_oauth_state(
             state,
             request.cookies.get("monzo_oauth_state", ""),
             settings,
-            request.app.state.session_factory,
+            session_factory,
         )
     except SQLAlchemyError:
         raise HTTPException(
@@ -101,9 +115,7 @@ async def monzo_callback(request: Request, code: str, state: str):
         logger.error("oauth_callback_failed reason=session_signing_not_configured")
         raise HTTPException(status_code=503, detail="Session signing is not configured")
     try:
-        token_response = MonzoTokenResponse.model_validate(
-            await exchange_authorization_code(code, settings)
-        )
+        token_pair = await service.complete_monzo_login(code)
     except httpx.HTTPStatusError as exc:
         error_code, error_message = monzo_error_details(exc.response)
         logger.warning(
@@ -121,15 +133,12 @@ async def monzo_callback(request: Request, code: str, state: str):
             "oauth_token_exchange_failed reason=monzo_unreachable",
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
-    except (ValidationError, ValueError) as exc:
+    except OAuthTokenResponseError as exc:
         logger.error("oauth_token_exchange_failed reason=invalid_response")
         raise HTTPException(
             status_code=502, detail="Monzo returned an invalid token response"
         ) from exc
 
-    try:
-        with request.app.state.session_factory() as session:
-            token_pair = save_monzo_tokens(token_response, session, settings)
     except MonzoDisconnectPendingError:
         raise HTTPException(
             status_code=409,

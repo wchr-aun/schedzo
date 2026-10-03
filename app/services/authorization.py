@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import Settings
 from app.db.models import AppSession, MonzoCredential
 from app.observability import get_logger, monzo_error_details
-from app.services.monzo import refresh_access_token
+from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.token_store import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
@@ -91,7 +91,11 @@ def decode_app_session_id(token: str, settings: Settings) -> str | None:
 
 
 async def resolve_monzo_access_token(
-    user_id: str, session_factory, settings: Settings
+    user_id: str,
+    session_factory,
+    settings: Settings,
+    *,
+    client: MonzoClient | None = None,
 ) -> str:
     try:
         with session_factory() as session:
@@ -109,13 +113,19 @@ async def resolve_monzo_access_token(
     lock = monzo_refresh_lock(user_id)
     await asyncio.to_thread(lock.acquire)
     try:
-        return await _refresh_access_token_locked(user_id, session_factory, settings)
+        async with monzo_client_scope(client) as scoped_client:
+            return await _refresh_access_token_locked(
+                user_id, session_factory, settings, scoped_client
+            )
     finally:
         lock.release()
 
 
 async def _refresh_access_token_locked(
-    user_id: str, session_factory, settings: Settings
+    user_id: str,
+    session_factory,
+    settings: Settings,
+    client: MonzoClient,
 ) -> str:
     try:
         with session_factory() as session:
@@ -136,7 +146,7 @@ async def _refresh_access_token_locked(
         raise TokenStorageError("Monzo OAuth is not configured")
 
     try:
-        refreshed = await refresh_access_token(refresh_token, settings)
+        refreshed = await client.refresh_access_token(refresh_token, settings)
     except httpx.HTTPStatusError as exc:
         error_code, error_message = monzo_error_details(exc.response)
         logger.warning(

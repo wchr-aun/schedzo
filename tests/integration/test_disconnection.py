@@ -138,7 +138,7 @@ def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
         )
 
     monkeypatch.setattr(
-        "app.services.authorization.refresh_access_token", provider_refresh
+        "app.services.monzo.MonzoClient.refresh_access_token", provider_refresh
     )
     with pytest.raises(MonzoConnectionError):
         asyncio.run(

@@ -2,7 +2,6 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from time import time
-from app.services.oauth_state import create_oauth_state, consume_oauth_state
 
 import httpx
 import pytest
@@ -11,12 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base
-from app.main import create_app
-from app.routers import monzo, tasks
 from app.dependencies import monzo_session
 from app.domain.authentication import MonzoSession
-from app.domain.transfers import ScheduleTransferCommand, ScheduledTransferDetails
-from app.domain.transfers import ScheduledTransfersPage
+from app.domain.transfers import (
+    ScheduledTransferDetails,
+    ScheduledTransfersPage,
+    ScheduleTransferCommand,
+)
+from app.main import create_app
+from app.routers import tasks
+from app.services.monzo import MonzoClient
+from app.services.oauth_state import consume_oauth_state, create_oauth_state
 
 
 @contextmanager
@@ -311,10 +315,10 @@ def test_monzo_callback_requires_jwt_configuration(settings):
 def test_monzo_callback_rejects_incomplete_token_payload(
     monkeypatch, client, token_response
 ):
-    async def fake_exchange(code, settings):
+    async def fake_exchange(self, code, settings):
         return token_response
 
-    monkeypatch.setattr(monzo, "exchange_authorization_code", fake_exchange)
+    monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fake_exchange)
     state = create_oauth_state(client.app.state.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
@@ -345,10 +349,10 @@ def test_monzo_callback_rejects_incomplete_token_payload(
 def test_monzo_callback_maps_upstream_errors(
     monkeypatch, client, failure, expected_status, expected_detail
 ):
-    async def fail_exchange(code, settings):
+    async def fail_exchange(self, code, settings):
         raise failure
 
-    monkeypatch.setattr(monzo, "exchange_authorization_code", fail_exchange)
+    monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fail_exchange)
     state = create_oauth_state(client.app.state.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
 

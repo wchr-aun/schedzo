@@ -6,7 +6,7 @@ import httpx
 
 from app.domain.transfers import TransferExecution, TransferType
 from app.observability import get_logger, monzo_error_details
-from app.services.monzo import create_feed_item
+from app.services.monzo import MonzoClient
 
 logger = get_logger(__name__)
 
@@ -18,6 +18,7 @@ SCHEDULER_UI_URL = "https://monzo-scheduler-ui.vercel.app"
 
 
 async def notify_transfer_result(
+    client: MonzoClient,
     access_token: str,
     values: TransferExecution,
     transfer_id: str,
@@ -39,7 +40,7 @@ async def notify_transfer_result(
     account_id = quote(values.account_id, safe="")
     pot_id = quote(values.pot_id, safe="")
     try:
-        response = await create_feed_item(
+        response = await client.create_feed_item(
             access_token,
             values.account_id,
             title=title,
