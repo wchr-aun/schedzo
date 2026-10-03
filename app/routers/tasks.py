@@ -16,12 +16,11 @@ from app.dependencies import authenticated_session, monzo_session
 from app.domain.authentication import AuthenticationContext, MonzoSession
 from app.db.models import AppSession, MonzoCredential
 from app.schemas.tasks import (
-    UK_TIMEZONE,
     ScheduleTransferRequest,
     ScheduledTransferResponse,
     ScheduledTransfersPageResponse,
-    TransferStatus,
 )
+from app.domain.transfers import ScheduledTransferDetails, TransferStatus
 from app.services.scheduler import (
     InvalidScheduleError,
     SchedulingPausedError,
@@ -173,21 +172,7 @@ def get_scheduled_transfers(
         ) from exc
 
     return ScheduledTransfersPageResponse(
-        items=[
-            ScheduledTransferResponse(
-                setup_id=transfer.setup_id,
-                transfer_id=transfer.transfer_id,
-                scheduled_for=transfer.scheduled_for,
-                created_at=transfer.created_at,
-                interval=transfer.interval,
-                type=transfer.transfer_type,
-                amount=transfer.amount,
-                setup_status=transfer.setup_status,
-                status=transfer.status,
-                executed_at=transfer.executed_at,
-            )
-            for transfer in page.items
-        ],
+        items=[_transfer_response(transfer) for transfer in page.items],
         total=page.total,
         limit=page.limit,
         offset=page.offset,
@@ -201,12 +186,12 @@ def create_scheduled_transfer(
     authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduledTransferResponse:
     try:
-        setup, transfer, _job = schedule_transfer(
+        transfer = schedule_transfer(
             request.app.state.scheduler,
             request.app.state.session_factory,
             request.app.state.settings,
             authentication.user_id,
-            transfer_request,
+            transfer_request.to_command(),
             session_token=authentication.session_token,
         )
     except SessionAuthenticationError:
@@ -226,22 +211,7 @@ def create_scheduled_transfer(
             detail="Scheduled transfer storage is unavailable",
         ) from exc
 
-    return ScheduledTransferResponse(
-        setup_id=setup.setup_id,
-        transfer_id=transfer.transfer_id,
-        scheduled_for=transfer.scheduled_for.astimezone(UK_TIMEZONE),
-        created_at=transfer.created_at.astimezone(UK_TIMEZONE),
-        interval=setup.interval,
-        type=setup.transfer_type,
-        amount=setup.amount,
-        setup_status=setup.status,
-        status=transfer.status,
-        executed_at=(
-            transfer.executed_at.astimezone(UK_TIMEZONE)
-            if transfer.executed_at is not None
-            else None
-        ),
-    )
+    return _transfer_response(transfer)
 
 
 @router.delete(
@@ -293,3 +263,18 @@ def resume_transfers(
             status_code=503, detail="Session storage is unavailable"
         ) from None
     return Response(status_code=204)
+
+
+def _transfer_response(transfer: ScheduledTransferDetails) -> ScheduledTransferResponse:
+    return ScheduledTransferResponse(
+        setup_id=transfer.setup_id,
+        transfer_id=transfer.transfer_id,
+        scheduled_for=transfer.scheduled_for,
+        created_at=transfer.created_at,
+        interval=transfer.interval,
+        type=transfer.transfer_type,
+        amount=transfer.amount,
+        setup_status=transfer.setup_status,
+        status=transfer.status,
+        executed_at=transfer.executed_at,
+    )

@@ -15,7 +15,7 @@ from app.main import create_app
 from app.routers import monzo, tasks
 from app.dependencies import monzo_session
 from app.domain.authentication import MonzoSession
-from app.schemas.tasks import ScheduleTransferRequest
+from app.domain.transfers import ScheduleTransferCommand, ScheduledTransferDetails
 from app.services.scheduler import ScheduledTransfersPage
 
 
@@ -58,30 +58,18 @@ def test_health_route_adds_hsts_over_https(client):
 
 def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
     scheduled_for = datetime(2030, 1, 1, 9, 30, tzinfo=timezone.utc)
-    setup = type(
-        "Setup",
-        (),
-        {
-            "setup_id": "setup-123",
-            "interval": "weekly",
-            "transfer_type": "withdraw",
-            "amount": 500,
-            "status": "active",
-        },
-    )()
-    transfer = type(
-        "Transfer",
-        (),
-        {
-            "transfer_id": "transfer-123",
-            "setup_id": "setup-123",
-            "scheduled_for": scheduled_for,
-            "created_at": scheduled_for,
-            "executed_at": None,
-            "status": "pending",
-        },
-    )()
-    job = type("Job", (), {"next_run_time": scheduled_for})()
+    transfer = ScheduledTransferDetails(
+        setup_id="setup-123",
+        transfer_id="transfer-123",
+        scheduled_for=scheduled_for,
+        created_at=scheduled_for,
+        interval="weekly",
+        transfer_type="withdraw",
+        amount=500,
+        setup_status="active",
+        status="pending",
+        executed_at=None,
+    )
     called = {}
 
     def fake_schedule(scheduler, session_factory, settings, user_id, request, **kwargs):
@@ -92,7 +80,7 @@ def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
             user_id=user_id,
             request=request,
         )
-        return setup, transfer, job
+        return transfer
 
     monkeypatch.setattr(tasks, "schedule_transfer", fake_schedule)
     client.app.dependency_overrides[monzo_session] = lambda: MonzoSession(
@@ -128,8 +116,8 @@ def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
     assert called["session_factory"] is client.app.state.session_factory
     assert called["settings"] is client.app.state.settings
     assert called["user_id"] == "user_123"
-    assert isinstance(called["request"], ScheduleTransferRequest)
-    assert called["request"].type == "withdraw"
+    assert isinstance(called["request"], ScheduleTransferCommand)
+    assert called["request"].transfer_type == "withdraw"
 
 
 def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):

@@ -1,9 +1,7 @@
 """Persistence, recovery, cancellation, and execution of scheduled transfers."""
 
 import asyncio
-import calendar
-from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import quote
 from uuid import uuid6
@@ -19,9 +17,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.db.models import MonzoCredential, ScheduledTransfer, ScheduledTransferSetup
 from app.observability import get_logger, monzo_error_details
-from app.schemas.tasks import (
-    UK_TIMEZONE,
-    ScheduleTransferRequest,
+from app.domain.time import UK_TIMEZONE, as_utc as _as_utc
+from app.domain.recurrence import Recurrence, next_occurrence
+from app.domain.transfers import (
+    InvalidScheduleError,
+    ScheduleNotFoundError,
+    ScheduleQuotaExceededError,
+    SchedulingPausedError,
+    ScheduleTransferCommand,
+    TransferExecution,
+    ScheduledTransferDetails,
+    ScheduledTransfersPage,
     TransferInterval,
     TransferStatus,
     TransferType,
@@ -43,59 +49,10 @@ FEED_IMAGE_URL = (
 SCHEDULER_UI_URL = "https://monzo-scheduler-ui.vercel.app"
 
 
-class InvalidScheduleError(ValueError):
-    """The requested schedule cannot be registered."""
-
-
-class ScheduleNotFoundError(LookupError):
-    """The requested setup does not exist for the authenticated user."""
-
-
-class ScheduleQuotaExceededError(ValueError):
-    """The user has reached the active schedule limit."""
-
-
 MAX_ACTIVE_SCHEDULES_PER_USER = 50
 MAX_SCHEDULE_CREATIONS_PER_USER_PER_DAY = 100
 
-
-@dataclass(frozen=True)
-class TransferExecution:
-    setup_id: str
-    user_id: str
-    transfer_type: str
-    amount: int
-    pot_id: str
-    account_id: str
-
-
-@dataclass(frozen=True)
-class ScheduledTransferDetails:
-    setup_id: str
-    transfer_id: str
-    scheduled_for: datetime
-    created_at: datetime
-    interval: TransferInterval
-    transfer_type: TransferType
-    amount: int
-    setup_status: str
-    status: str
-    executed_at: datetime | None
-
-
-@dataclass(frozen=True)
-class ScheduledTransfersPage:
-    items: list[ScheduledTransferDetails]
-    total: int
-    limit: int
-    offset: int
-
-
 _user_execution_lock = user_execution_lock
-
-
-class SchedulingPausedError(ValueError):
-    """Emergency stop must be explicitly cleared before creating schedules."""
 
 
 def list_scheduled_transfers(
@@ -143,31 +100,32 @@ def list_scheduled_transfers(
         ).all()
 
         return ScheduledTransfersPage(
-            items=[
-                ScheduledTransferDetails(
-                    setup_id=setup.setup_id,
-                    transfer_id=transfer.transfer_id,
-                    scheduled_for=_as_utc(transfer.scheduled_for).astimezone(
-                        UK_TIMEZONE
-                    ),
-                    created_at=_as_utc(transfer.created_at).astimezone(UK_TIMEZONE),
-                    interval=TransferInterval(setup.interval),
-                    transfer_type=TransferType(setup.transfer_type),
-                    amount=setup.amount,
-                    setup_status=setup.status,
-                    status=transfer.status,
-                    executed_at=(
-                        _as_utc(transfer.executed_at).astimezone(UK_TIMEZONE)
-                        if transfer.executed_at is not None
-                        else None
-                    ),
-                )
-                for transfer, setup in rows
-            ],
+            items=[_transfer_details(setup, transfer) for transfer, setup in rows],
             total=total or 0,
             limit=limit,
             offset=offset,
         )
+
+
+def _transfer_details(
+    setup: ScheduledTransferSetup, transfer: ScheduledTransfer
+) -> ScheduledTransferDetails:
+    return ScheduledTransferDetails(
+        setup_id=setup.setup_id,
+        transfer_id=transfer.transfer_id,
+        scheduled_for=_as_utc(transfer.scheduled_for).astimezone(UK_TIMEZONE),
+        created_at=_as_utc(transfer.created_at).astimezone(UK_TIMEZONE),
+        interval=TransferInterval(setup.interval),
+        transfer_type=TransferType(setup.transfer_type),
+        amount=setup.amount,
+        setup_status=setup.status,
+        status=transfer.status,
+        executed_at=(
+            _as_utc(transfer.executed_at).astimezone(UK_TIMEZONE)
+            if transfer.executed_at is not None
+            else None
+        ),
+    )
 
 
 def _schedule_transfer_unlocked(
@@ -175,11 +133,11 @@ def _schedule_transfer_unlocked(
     session_factory: sessionmaker[Session],
     settings: Settings,
     user_id: str,
-    request: ScheduleTransferRequest,
+    command: ScheduleTransferCommand,
     *,
     now: datetime | None = None,
-) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
-    scheduled_at = request.datetime.astimezone(UK_TIMEZONE)
+) -> ScheduledTransferDetails:
+    scheduled_at = command.scheduled_for.astimezone(UK_TIMEZONE)
     current_time = (now or datetime.now(timezone.utc)).astimezone(UK_TIMEZONE)
     if scheduled_at <= current_time:
         raise InvalidScheduleError("datetime must be in the future")
@@ -214,11 +172,11 @@ def _schedule_transfer_unlocked(
         scheduled_date=scheduled_at.date(),
         hour=scheduled_at.hour,
         minute=scheduled_at.minute,
-        interval=request.interval.value,
-        transfer_type=request.type.value,
-        amount=request.amount,
-        pot_id=request.pot_id,
-        account_id=request.account_id,
+        interval=command.interval.value,
+        transfer_type=command.transfer_type.value,
+        amount=command.amount,
+        pot_id=command.pot_id,
+        account_id=command.account_id,
         status="active",
     )
     transfer = ScheduledTransfer(
@@ -247,7 +205,7 @@ def _schedule_transfer_unlocked(
             _remove_job_if_present(scheduler, job.id)
         raise
 
-    return setup, transfer, job
+    return _transfer_details(setup, transfer)
 
 
 def schedule_transfer(
@@ -255,11 +213,11 @@ def schedule_transfer(
     session_factory: sessionmaker[Session],
     settings: Settings,
     user_id: str,
-    request: ScheduleTransferRequest,
+    command: ScheduleTransferCommand,
     *,
     now: datetime | None = None,
     session_token: str | None = None,
-) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
+) -> ScheduledTransferDetails:
     lock = _user_execution_lock(user_id)
     lock.acquire()
     try:
@@ -273,7 +231,7 @@ def schedule_transfer(
             if credential is not None and credential.scheduling_paused:
                 raise SchedulingPausedError
         return _schedule_transfer_unlocked(
-            scheduler, session_factory, settings, user_id, request, now=now
+            scheduler, session_factory, settings, user_id, command, now=now
         )
     finally:
         lock.release()
@@ -716,31 +674,16 @@ def _finalize_occurrence(
         raise
 
 
-def _next_occurrence(
-    setup: ScheduledTransferSetup, previous_scheduled_for: datetime
-) -> datetime:
-    previous = _as_utc(previous_scheduled_for).astimezone(UK_TIMEZONE)
-    if setup.interval == TransferInterval.DAILY.value:
-        next_date = previous.date() + timedelta(days=1)
-    elif setup.interval == TransferInterval.WEEKLY.value:
-        next_date = previous.date() + timedelta(weeks=1)
-    else:
-        next_date = _next_month(previous.date(), setup.scheduled_date.day)
-
-    local = datetime.combine(
-        next_date,
-        time(setup.hour, setup.minute),
-        tzinfo=UK_TIMEZONE,
+def _next_occurrence(setup: ScheduledTransferSetup, previous: datetime) -> datetime:
+    return next_occurrence(
+        Recurrence(
+            setup.scheduled_date,
+            setup.hour,
+            setup.minute,
+            TransferInterval(setup.interval),
+        ),
+        previous,
     )
-    return local.astimezone(timezone.utc)
-
-
-def _next_month(previous: date, requested_day: int) -> date:
-    month_index = previous.year * 12 + previous.month
-    year, zero_based_month = divmod(month_index, 12)
-    month = zero_based_month + 1
-    day = min(requested_day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
 
 
 def _add_transfer_job(
@@ -768,12 +711,6 @@ def _remove_job_if_present(scheduler: BackgroundScheduler, transfer_id: str) -> 
         scheduler.remove_job(transfer_id)
     except JobLookupError:
         pass
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def resume_user_scheduling(user_id, session_token, session_factory, settings):

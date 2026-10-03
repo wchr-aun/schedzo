@@ -1,29 +1,14 @@
 from datetime import datetime as DateTime
-from enum import StrEnum
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-UK_TIMEZONE = ZoneInfo("Europe/London")
-
-
-class TransferInterval(StrEnum):
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-
-
-class TransferType(StrEnum):
-    DEPOSIT = "deposit"
-    WITHDRAW = "withdraw"
-
-
-class TransferStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+from app.domain.transfers import (
+    ScheduleTransferCommand,
+    TransferInterval,
+    TransferType,
+    TransferStatus,
+    validate_uk_datetime,
+)
 
 
 class ScheduleTransferRequest(BaseModel):
@@ -39,15 +24,17 @@ class ScheduleTransferRequest(BaseModel):
     @field_validator("datetime")
     @classmethod
     def validate_uk_datetime(cls, value: DateTime) -> DateTime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("datetime must include the UK UTC offset")
+        return validate_uk_datetime(value)
 
-        uk_value = value.astimezone(UK_TIMEZONE)
-        if value.replace(tzinfo=None) != uk_value.replace(tzinfo=None):
-            raise ValueError("datetime must represent local UK time")
-        if value.second != 0 or value.microsecond != 0:
-            raise ValueError("datetime must be aligned to a whole minute")
-        return uk_value
+    def to_command(self) -> ScheduleTransferCommand:
+        return ScheduleTransferCommand(
+            scheduled_for=self.datetime,
+            interval=self.interval,
+            transfer_type=self.type,
+            amount=self.amount,
+            pot_id=self.pot_id,
+            account_id=self.account_id,
+        )
 
 
 class ScheduledTransferResponse(BaseModel):
