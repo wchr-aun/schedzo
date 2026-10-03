@@ -1,13 +1,11 @@
 """Authenticated pass-through routes for Monzo account resources."""
 
 from collections.abc import Awaitable
-from dataclasses import dataclass, field
-from typing import Literal, Never, TypeVar
+from typing import Literal, TypeVar
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
 from app.observability import get_logger, monzo_error_details
@@ -18,15 +16,7 @@ from app.schemas.monzo import (
     MonzoAccountsResponse,
     PotsResponse,
 )
-from app.services.authorization import (
-    MonzoConnectionError,
-    MonzoTokenResponseError,
-    SessionAuthenticationError,
-    TokenStorageError,
-    decode_app_session_id,
-    decode_user_id,
-    resolve_monzo_access_token,
-)
+from app.dependencies import monzo_access_token
 from app.services.monzo import (
     BalanceResult,
     get_accounts,
@@ -36,109 +26,11 @@ from app.services.monzo import (
 )
 
 router = APIRouter(tags=["monzo"])
-bearer_scheme = HTTPBearer(auto_error=False)
 logger = get_logger(__name__)
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 ResponseValueT = TypeVar("ResponseValueT")
 MonzoOperation = Literal["accounts", "balance", "pots"]
-
-
-@dataclass(frozen=True)
-class MonzoSession:
-    user_id: str
-    access_token: str = field(repr=False)
-    session_token: str | None = field(default=None, repr=False)
-
-
-async def authenticated_user_id(
-    request: Request,
-    authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
-    if authorization is None:
-        logger.warning(
-            "authentication_failed path=%s reason=bearer_token_missing",
-            request.url.path,
-        )
-        _raise_unauthorized("Bearer token required")
-
-    try:
-        user_id = decode_user_id(
-            authorization.credentials,
-            request.app.state.settings,
-            request.app.state.session_factory,
-        )
-        request.state.session_token = authorization.credentials
-        request.state.app_session_id = decode_app_session_id(
-            authorization.credentials, request.app.state.settings
-        )
-        return user_id
-    except SessionAuthenticationError:
-        logger.warning(
-            "authentication_failed path=%s reason=invalid_or_expired_jwt",
-            request.url.path,
-        )
-        _raise_unauthorized("Invalid or expired bearer token")
-    except TokenStorageError as exc:
-        logger.error(
-            "credential_resolution_failed path=%s reason=storage_or_configuration",
-            request.url.path,
-        )
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-async def monzo_session(
-    request: Request,
-    user_id: str = Depends(authenticated_user_id),
-) -> MonzoSession:
-    try:
-        access_token = await resolve_monzo_access_token(
-            user_id,
-            request.app.state.session_factory,
-            request.app.state.settings,
-        )
-        return MonzoSession(
-            user_id=user_id,
-            access_token=access_token,
-            session_token=request.state.session_token,
-        )
-    except MonzoConnectionError:
-        logger.warning(
-            "authentication_failed path=%s reason=monzo_connection_unavailable",
-            request.url.path,
-        )
-        _raise_unauthorized("Monzo connection is missing or expired")
-    except TokenStorageError as exc:
-        logger.error(
-            "credential_resolution_failed path=%s reason=storage_or_configuration",
-            request.url.path,
-        )
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except MonzoTokenResponseError as exc:
-        logger.error(
-            "credential_refresh_failed path=%s reason=invalid_response",
-            request.url.path,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail="Monzo returned an invalid token response",
-        ) from exc
-    except httpx.RequestError as exc:
-        logger.error(
-            "credential_refresh_failed path=%s reason=monzo_unreachable",
-            request.url.path,
-        )
-        raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502, detail="Monzo token refresh failed"
-        ) from exc
-
-
-async def monzo_access_token(
-    authentication: MonzoSession = Depends(monzo_session),
-) -> str:
-    return authentication.access_token
 
 
 @router.get(
@@ -317,12 +209,4 @@ def _requires_monzo_approval(response: httpx.Response) -> bool:
     return (
         isinstance(payload, dict)
         and payload.get("code") == "forbidden.insufficient_permissions"
-    )
-
-
-def _raise_unauthorized(detail: str) -> Never:
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=detail,
-        headers={"WWW-Authenticate": "Bearer"},
     )

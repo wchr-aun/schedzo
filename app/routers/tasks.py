@@ -12,7 +12,8 @@ from fastapi import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.routers.resources import MonzoSession, authenticated_user_id, monzo_session
+from app.dependencies import authenticated_session, monzo_session
+from app.domain.authentication import AuthenticationContext, MonzoSession
 from app.db.models import AppSession, MonzoCredential
 from app.schemas.tasks import (
     UK_TIMEZONE,
@@ -54,19 +55,20 @@ DEFAULT_TRANSFER_STATUSES = (
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     request: Request,
-    user_id: str = Depends(authenticated_user_id),
+    authentication: AuthenticationContext = Depends(authenticated_session),
 ) -> Response:
+    user_id = authentication.user_id
     try:
         with (
             user_execution_lock(user_id),
             request.app.state.session_factory() as session,
         ):
             decode_user_id(
-                request.state.session_token,
+                authentication.session_token,
                 request.app.state.settings,
                 request.app.state.session_factory,
             )
-            app_session_id = getattr(request.state, "app_session_id", None)
+            app_session_id = authentication.app_session_id
             if app_session_id is not None:
                 app_session = session.get(AppSession, app_session_id)
                 if app_session is not None and app_session.user_id == user_id:
@@ -91,14 +93,15 @@ def logout(
 @router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
 def emergency_stop(
     request: Request,
-    user_id: str = Depends(authenticated_user_id),
+    authentication: AuthenticationContext = Depends(authenticated_session),
 ) -> Response:
+    user_id = authentication.user_id
     try:
         emergency_stop_user_transfers(
             request.app.state.scheduler,
             request.app.state.session_factory,
             user_id,
-            session_token=request.state.session_token,
+            session_token=authentication.session_token,
             settings=request.app.state.settings,
             disconnect=True,
         )
@@ -271,11 +274,15 @@ def cancel_transfer_schedule(
 
 
 @router.post("/resume-transfers", status_code=204)
-def resume_transfers(request: Request, user_id: str = Depends(authenticated_user_id)):
+def resume_transfers(
+    request: Request,
+    authentication: AuthenticationContext = Depends(authenticated_session),
+):
+    user_id = authentication.user_id
     try:
         resume_user_scheduling(
             user_id,
-            request.state.session_token,
+            authentication.session_token,
             request.app.state.session_factory,
             request.app.state.settings,
         )

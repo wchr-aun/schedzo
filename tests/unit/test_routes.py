@@ -13,7 +13,8 @@ from sqlalchemy.pool import StaticPool
 from app.db.models import Base
 from app.main import create_app
 from app.routers import monzo, tasks
-from app.routers.resources import MonzoSession, monzo_session
+from app.dependencies import monzo_session
+from app.domain.authentication import MonzoSession
 from app.schemas.tasks import ScheduleTransferRequest
 from app.services.scheduler import ScheduledTransfersPage
 
