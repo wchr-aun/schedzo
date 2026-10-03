@@ -5,8 +5,9 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.db.session import SessionFactory
 from app.domain.monzo import MonzoTokenResponse
+from app.domain.sessions import AppTokenPair
 from app.services.monzo import MonzoClient
-from app.services.token_store import AppTokenPair, save_monzo_tokens
+from app.services.sessions import issue_app_session
 
 
 class OAuthTokenResponseError(Exception):
@@ -33,5 +34,4 @@ class OAuthService:
         except ValidationError, ValueError:
             raise OAuthTokenResponseError from None
 
-        with self._session_factory() as session:
-            return save_monzo_tokens(token_response, session, self._settings)
+        return issue_app_session(token_response, self._session_factory, self._settings)

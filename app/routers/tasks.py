@@ -1,5 +1,4 @@
 from typing import Annotated
-from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -14,7 +13,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.dependencies import authenticated_session, monzo_session
 from app.domain.authentication import AuthenticationContext, MonzoSession
-from app.db.models import AppSession, MonzoCredential
 from app.schemas.tasks import (
     ScheduleTransferRequest,
     ScheduledTransferResponse,
@@ -28,18 +26,15 @@ from app.services.schedules import (
     ScheduleNotFoundError,
     ScheduleQuotaExceededError,
     cancel_scheduled_transfer,
-    emergency_stop_user_transfers,
     list_scheduled_transfers,
     schedule_transfer,
 )
 
-from app.services.authorization import (
-    SessionAuthenticationError,
-    decode_user_id,
-)
-from app.services.disconnection import retry_monzo_disconnection
+from app.domain.errors import SessionAuthenticationError
+
+from app.services.disconnection import disconnect_user
 from fastapi.responses import JSONResponse
-from app.services.user_locks import user_execution_lock
+from app.services.sessions import logout_session
 
 router = APIRouter(tags=["tasks"])
 
@@ -58,27 +53,11 @@ def logout(
 ) -> Response:
     user_id = authentication.user_id
     try:
-        with (
-            user_execution_lock(user_id),
-            request.app.state.session_factory() as session,
-        ):
-            decode_user_id(
-                authentication.session_token,
-                request.app.state.settings,
-                request.app.state.session_factory,
-            )
-            app_session_id = authentication.app_session_id
-            if app_session_id is not None:
-                app_session = session.get(AppSession, app_session_id)
-                if app_session is not None and app_session.user_id == user_id:
-                    app_session.revoked_at = datetime.now(timezone.utc)
-                    session.commit()
-            else:
-                # Legacy access JWTs have no per-session identifier.
-                credential = session.get(MonzoCredential, user_id)
-                if credential is not None:
-                    credential.session_version += 1
-                    session.commit()
+        logout_session(
+            authentication,
+            request.app.state.session_factory,
+            request.app.state.settings,
+        )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None
     except SQLAlchemyError as exc:
@@ -94,15 +73,12 @@ def emergency_stop(
     request: Request,
     authentication: AuthenticationContext = Depends(authenticated_session),
 ) -> Response:
-    user_id = authentication.user_id
     try:
-        emergency_stop_user_transfers(
+        disconnected = disconnect_user(
             request.app.state.scheduler,
             request.app.state.session_factory,
-            user_id,
-            session_token=authentication.session_token,
-            settings=request.app.state.settings,
-            disconnect=True,
+            request.app.state.settings,
+            authentication,
         )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None
@@ -110,9 +86,7 @@ def emergency_stop(
         raise HTTPException(
             status_code=503, detail="Scheduled transfer storage is unavailable"
         ) from exc
-    if not retry_monzo_disconnection(
-        user_id, request.app.state.session_factory, request.app.state.settings
-    ):
+    if not disconnected:
         return JSONResponse(
             {"detail": "Schedules stopped; Monzo disconnection pending"},
             status_code=202,

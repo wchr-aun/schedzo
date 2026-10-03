@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.db.models import MonzoCredential
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.token_store import decrypt_token, save_monzo_tokens
+from app.services.token_crypto import decrypt_token
+from app.services.sessions import issue_app_session
 
 
 def test_oauth_state_is_bound_to_the_browser_cookie(client):
@@ -96,17 +97,16 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
 
 
 def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
-    with client.app.state.session_factory() as session:
-        token_pair = save_monzo_tokens(
-            MonzoTokenResponse(
-                user_id="user_test123",
-                access_token="test-access-token",
-                refresh_token="test-monzo-refresh-token",
-                expires_in=21600,
-            ),
-            session,
-            settings,
-        )
+    token_pair = issue_app_session(
+        MonzoTokenResponse(
+            user_id="user_test123",
+            access_token="test-access-token",
+            refresh_token="test-monzo-refresh-token",
+            expires_in=21600,
+        ),
+        client.app.state.session_factory,
+        settings,
+    )
 
     def refresh():
         return client.post(
@@ -134,18 +134,17 @@ def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
 
 
 def test_older_refresh_reuse_revokes_after_multiple_rotations(client, settings):
-    from app.services.token_store import rotate_app_refresh_token
+    from app.services.sessions import rotate_app_refresh_token
     from app.services.authorization import decode_user_id, SessionAuthenticationError
     import pytest
 
-    with client.app.state.session_factory() as session:
-        original = save_monzo_tokens(
-            MonzoTokenResponse(
-                user_id="user_reuse", access_token="synthetic", expires_in=3600
-            ),
-            session,
-            settings,
-        )
+    original = issue_app_session(
+        MonzoTokenResponse(
+            user_id="user_reuse", access_token="synthetic", expires_in=3600
+        ),
+        client.app.state.session_factory,
+        settings,
+    )
     second = rotate_app_refresh_token(
         original.refresh_token, client.app.state.session_factory, settings
     )
@@ -181,16 +180,17 @@ def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
 ):
     from datetime import datetime, timedelta, timezone
     from app.db.models import AppSession, UsedAppRefreshToken
-    from app.services.token_store import rotate_app_refresh_token, _hash_refresh_token
+    from app.services.sessions import rotate_app_refresh_token
+    from app.services.token_crypto import hash_refresh_token
     from app.services.authorization import decode_user_id
     from app.services.maintenance import prune_history
 
     with client.app.state.session_factory() as session:
-        pair = save_monzo_tokens(
+        pair = issue_app_session(
             MonzoTokenResponse(
                 user_id="expiry-user", access_token="synthetic", expires_in=3600
             ),
-            session,
+            client.app.state.session_factory,
             settings,
         )
         row = session.query(AppSession).filter_by(user_id="expiry-user").one()
@@ -201,7 +201,7 @@ def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
         session.add_all(
             [
                 UsedAppRefreshToken(
-                    token_hash=_hash_refresh_token(f"used-{i}"),
+                    token_hash=hash_refresh_token(f"used-{i}"),
                     session_id=row.session_id,
                     used_at=old,
                 )

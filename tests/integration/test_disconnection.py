@@ -45,7 +45,7 @@ def test_expired_connection_is_renewed_then_revoked(
     client, settings, mock_monzo_disconnection
 ):
     from datetime import datetime, timedelta, timezone
-    from app.services.token_store import encrypt_token
+    from app.services.token_crypto import encrypt_token
 
     pair = login(client, settings)
     with client.app.state.session_factory() as session:
@@ -81,7 +81,7 @@ def test_revoked_grant_can_finish_disconnection_without_permanent_retry(
     client, settings, mock_monzo_disconnection
 ):
     from datetime import datetime, timedelta, timezone
-    from app.services.token_store import encrypt_token
+    from app.services.token_crypto import encrypt_token
 
     pair = login(client, settings)
     with client.app.state.session_factory() as session:
@@ -111,11 +111,11 @@ def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
     import pytest
     from datetime import datetime, timedelta, timezone
     from app.schemas.monzo import MonzoTokenResponse
-    from app.services.authorization import (
+    from app.services.monzo_credentials import (
         resolve_monzo_access_token,
         MonzoConnectionError,
     )
-    from app.services.token_store import encrypt_token
+    from app.services.token_crypto import encrypt_token
 
     login(client, settings)
     with client.app.state.session_factory() as session:

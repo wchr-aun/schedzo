@@ -15,7 +15,7 @@ from app.db.models import (
 )
 from app.domain.time import UK_TIMEZONE
 from app.services.transfer_execution import execute_scheduled_transfer
-from app.services.token_store import encrypt_token
+from app.services.token_crypto import encrypt_token
 from app.services.monzo import MonzoClient, monzo_client_scope
 
 

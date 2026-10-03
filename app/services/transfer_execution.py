@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.domain.recurrence import Recurrence, next_occurrence
 from app.domain.transfers import TransferExecution, TransferInterval, TransferType
 from app.observability import monzo_error_details
-from app.services.authorization import resolve_monzo_access_token
+from app.services.monzo_credentials import resolve_monzo_access_token
 from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.notifications import notify_transfer_result, pot_name
 from app.services.scheduler import add_transfer_job, remove_job_if_present

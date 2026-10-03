@@ -8,7 +8,7 @@ from app.db.models import (
     ScheduledTransfer,
 )
 from app.services.maintenance import prune_history
-from app.services.token_store import rotate_app_refresh_token
+from app.services.sessions import rotate_app_refresh_token
 from tests.integration.test_security_races import login, BODY
 
 
@@ -43,7 +43,7 @@ def test_cancelled_schedules_still_count_toward_creation_quota(client, settings)
 
 def test_refresh_quota_does_not_rotate_or_revoke_session(client, settings, monkeypatch):
     pair = login(client, settings)
-    monkeypatch.setattr("app.services.token_store.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
+    monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
     rotated = rotate_app_refresh_token(
         pair.refresh_token, client.app.state.session_factory, settings
     )
@@ -51,7 +51,7 @@ def test_refresh_quota_does_not_rotate_or_revoke_session(client, settings, monke
         "/auth/refresh", json={"refreshToken": rotated.refresh_token}
     )
     assert response.status_code == 429
-    monkeypatch.setattr("app.services.token_store.MAX_REFRESHES_PER_USER_PER_HOUR", 60)
+    monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 60)
     assert (
         rotate_app_refresh_token(
             rotated.refresh_token, client.app.state.session_factory, settings
@@ -127,7 +127,7 @@ def test_pruning_removes_inactive_sessions_but_preserves_live_sessions(
     client, settings
 ):
     from app.schemas.monzo import MonzoTokenResponse
-    from app.services.token_store import save_monzo_tokens
+    from app.services.sessions import issue_app_session
 
     pair = login(client, settings)
     rotate_app_refresh_token(
@@ -137,11 +137,11 @@ def test_pruning_removes_inactive_sessions_but_preserves_live_sessions(
         inactive = session.query(AppSession).one()
         inactive.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         session.commit()
-        live = save_monzo_tokens(
+        live = issue_app_session(
             MonzoTokenResponse(
                 user_id="live-user", access_token="synthetic", expires_in=3600
             ),
-            session,
+            client.app.state.session_factory,
             settings,
         )
     prune_history(client.app.state.session_factory)

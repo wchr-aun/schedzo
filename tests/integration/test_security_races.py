@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 
 from app.db.models import ScheduledTransferSetup
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.token_store import save_monzo_tokens
+from app.services.sessions import issue_app_session
 from app.services.schedules import schedule_transfer
 
 BODY = {
@@ -20,14 +20,13 @@ BODY = {
 
 
 def login(client, settings):
-    with client.app.state.session_factory() as session:
-        return save_monzo_tokens(
-            MonzoTokenResponse(
-                user_id="audit-user", access_token="synthetic-token", expires_in=3600
-            ),
-            session,
-            settings,
-        )
+    return issue_app_session(
+        MonzoTokenResponse(
+            user_id="audit-user", access_token="synthetic-token", expires_in=3600
+        ),
+        client.app.state.session_factory,
+        settings,
+    )
 
 
 @pytest.mark.parametrize("operation", ["/emergency-stop", "/logout"])

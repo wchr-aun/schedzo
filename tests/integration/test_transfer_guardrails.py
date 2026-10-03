@@ -5,7 +5,7 @@ import httpx
 
 from app.db.models import AppSession, ScheduledTransfer
 from app.services.transfer_execution import execute_scheduled_transfer
-from app.services.token_store import rotate_app_refresh_token
+from app.services.sessions import rotate_app_refresh_token
 from tests.integration.test_security_races import login, BODY
 
 

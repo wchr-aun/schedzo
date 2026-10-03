@@ -10,18 +10,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import Settings
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext, MonzoSession
-from app.observability import get_logger
-from app.rate_limit import RequestRateLimiter
-from app.services.authorization import (
+from app.domain.errors import (
     MonzoConnectionError,
     MonzoTokenResponseError,
     SessionAuthenticationError,
     TokenStorageError,
-    decode_app_session_id,
-    decode_user_id,
-    resolve_monzo_access_token,
 )
+from app.observability import get_logger
+from app.rate_limit import RequestRateLimiter
+from app.services.authorization import authenticate_session
 from app.services.monzo import MonzoClient
+from app.services.monzo_credentials import resolve_monzo_access_token
 from app.services.oauth import OAuthService
 from app.services.resources import ResourceService
 
@@ -77,15 +76,8 @@ def authenticated_session(
         _raise_unauthorized("Bearer token required")
 
     try:
-        user_id = decode_user_id(
-            authorization.credentials,
-            settings,
-            session_factory,
-        )
-        return AuthenticationContext(
-            user_id=user_id,
-            session_token=authorization.credentials,
-            app_session_id=decode_app_session_id(authorization.credentials, settings),
+        return authenticate_session(
+            authorization.credentials, settings, session_factory
         )
     except SessionAuthenticationError:
         logger.warning(

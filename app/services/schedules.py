@@ -22,7 +22,8 @@ from app.domain.transfers import (
     TransferStatus,
     TransferType,
 )
-from app.services.authorization import decode_user_id, SessionAuthenticationError
+from app.services.authorization import decode_user_id
+from app.domain.errors import SessionAuthenticationError
 from app.services.scheduler import add_transfer_job, remove_job_if_present
 from app.services.user_locks import user_execution_lock
 

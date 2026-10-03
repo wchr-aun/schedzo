@@ -14,6 +14,8 @@ from app.dependencies import (
     get_session_factory,
     get_settings,
 )
+from app.domain.errors import AppSessionQuotaError, MonzoDisconnectPendingError
+from app.domain.sessions import AppTokenPair
 from app.observability import monzo_error_details
 from app.rate_limit import RequestRateLimiter
 from app.schemas.monzo import AppRefreshRequest
@@ -22,12 +24,7 @@ from app.services.oauth_state import (
     consume_oauth_state,
     create_oauth_state,
 )
-from app.services.token_store import (
-    AppSessionQuotaError,
-    AppTokenPair,
-    MonzoDisconnectPendingError,
-    rotate_app_refresh_token,
-)
+from app.services.sessions import rotate_app_refresh_token
 
 router = APIRouter(tags=["monzo"])
 logger = logging.getLogger("schedzo.oauth")

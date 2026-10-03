@@ -2,7 +2,7 @@ import pytest
 
 from app.db.models import AppSession, UsedAppRefreshToken
 from app.db.session import create_session_factory
-from app.services.token_store import rotate_app_refresh_token
+from app.services.sessions import rotate_app_refresh_token
 from tests.integration.test_security_races import login
 
 
@@ -42,7 +42,7 @@ def test_retries_do_not_extend_window_and_expired_reuse_revokes(
 
 def test_duplicates_do_not_use_rotation_quota(client, settings, monkeypatch):
     pair = login(client, settings)
-    monkeypatch.setattr("app.services.token_store.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
+    monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
     first = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
     assert first.status_code == 200
     retry = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})

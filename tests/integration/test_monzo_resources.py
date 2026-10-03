@@ -9,9 +9,9 @@ import pytest
 import respx
 
 from app.db.models import MonzoCredential
-from app.services.token_store import encrypt_token, decrypt_token
+from app.services.token_crypto import encrypt_token, decrypt_token
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.authorization import resolve_monzo_access_token
+from app.services.monzo_credentials import resolve_monzo_access_token
 
 
 def _session_token(settings, user_id="user_test123"):
