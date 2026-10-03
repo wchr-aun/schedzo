@@ -10,7 +10,7 @@ from app.services.token_crypto import decrypt_token
 def test_failed_session_signing_rolls_back_credentials_and_session(
     client, settings, monkeypatch, existing
 ):
-    factory = client.app.state.session_factory
+    factory = client.app.state.resources.session_factory
     if existing:
         issue_app_session(
             MonzoTokenResponse(

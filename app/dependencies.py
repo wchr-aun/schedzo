@@ -3,7 +3,6 @@
 from typing import Never
 
 import httpx
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -16,8 +15,10 @@ from app.domain.errors import (
     SessionAuthenticationError,
     TokenStorageError,
 )
+from app.domain.scheduling import TransferJobs
 from app.observability import get_logger
 from app.rate_limit import RequestRateLimiter
+from app.runtime import ApplicationResources
 from app.services.authorization import authenticate_session
 from app.services.monzo import MonzoClient
 from app.services.monzo_credentials import resolve_monzo_access_token
@@ -28,20 +29,30 @@ logger = get_logger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_settings(request: Request) -> Settings:
-    return request.app.state.settings
+def get_resources(request: Request) -> ApplicationResources:
+    return request.app.state.resources
 
 
-def get_session_factory(request: Request) -> SessionFactory:
-    return request.app.state.session_factory
+def get_settings(resources: ApplicationResources = Depends(get_resources)) -> Settings:
+    return resources.settings
 
 
-def get_scheduler(request: Request) -> BackgroundScheduler:
-    return request.app.state.scheduler
+def get_session_factory(
+    resources: ApplicationResources = Depends(get_resources),
+) -> SessionFactory:
+    return resources.session_factory
 
 
-def _get_monzo_client(request: Request) -> MonzoClient:
-    return request.app.state.monzo_client
+def get_transfer_jobs(
+    resources: ApplicationResources = Depends(get_resources),
+) -> TransferJobs:
+    return resources.transfer_jobs
+
+
+def _get_monzo_client(
+    resources: ApplicationResources = Depends(get_resources),
+) -> MonzoClient:
+    return resources.monzo_client
 
 
 def get_resource_service(
@@ -58,8 +69,10 @@ def get_oauth_service(
     return OAuthService(client, session_factory, settings)
 
 
-def get_oauth_start_rate_limiter(request: Request) -> RequestRateLimiter:
-    return request.app.state.oauth_start_rate_limiter
+def get_oauth_start_rate_limiter(
+    resources: ApplicationResources = Depends(get_resources),
+) -> RequestRateLimiter:
+    return resources.oauth_start_rate_limiter
 
 
 def authenticated_session(

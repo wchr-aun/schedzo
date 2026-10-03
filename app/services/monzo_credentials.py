@@ -20,7 +20,7 @@ from app.domain.errors import (
 from app.domain.time import as_utc as _as_utc
 from app.observability import get_logger, monzo_error_details
 from app.services.monzo import MonzoClient, monzo_client_scope
-from app.services.token_crypto import encrypt_token, decrypt_token
+from app.services.token_crypto import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
 _refresh_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()

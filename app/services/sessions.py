@@ -1,7 +1,7 @@
 """Application session issuance, logout, and refresh rotation workflows."""
 
-from datetime import datetime, timedelta, timezone
 import secrets
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from uuid import uuid4
 
@@ -26,13 +26,13 @@ from app.domain.monzo import MonzoTokenResponse
 from app.domain.sessions import AppTokenPair
 from app.domain.time import as_utc
 from app.services.authorization import authenticate_session
-from app.services.user_locks import user_execution_lock
 from app.services.refresh_replay import refresh_replay_cache
 from app.services.token_crypto import (
-    encrypt_token,
     encode_access_token,
+    encrypt_token,
     hash_refresh_token,
 )
+from app.services.user_locks import user_execution_lock
 
 APP_REFRESH_TOKEN_TTL = timedelta(days=60)
 MAX_APP_SESSIONS_PER_USER_PER_DAY = 20

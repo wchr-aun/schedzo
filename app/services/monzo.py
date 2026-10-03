@@ -10,9 +10,9 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
 from app.domain.monzo import (
-    MonzoTokenResponse,
-    MonzoAccountsResponse,
     BalanceResponse,
+    MonzoAccountsResponse,
+    MonzoTokenResponse,
     PotsResponse,
 )
 from app.domain.monzo_errors import (

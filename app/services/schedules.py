@@ -3,28 +3,28 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid6
 
-from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import func, select
 
 from app.config import Settings
 from app.db.models import MonzoCredential, ScheduledTransfer, ScheduledTransferSetup
 from app.db.session import SessionFactory
-from app.domain.time import UK_TIMEZONE, as_utc as _as_utc
+from app.domain.errors import SessionAuthenticationError
+from app.domain.scheduling import TransferJobs
+from app.domain.time import UK_TIMEZONE
+from app.domain.time import as_utc as _as_utc
 from app.domain.transfers import (
     InvalidScheduleError,
-    ScheduleNotFoundError,
-    ScheduleQuotaExceededError,
-    SchedulingPausedError,
-    ScheduleTransferCommand,
     ScheduledTransferDetails,
     ScheduledTransfersPage,
+    ScheduleNotFoundError,
+    ScheduleQuotaExceededError,
+    ScheduleTransferCommand,
+    SchedulingPausedError,
     TransferInterval,
     TransferStatus,
     TransferType,
 )
 from app.services.authorization import decode_user_id
-from app.domain.errors import SessionAuthenticationError
-from app.services.scheduler import add_transfer_job, remove_job_if_present
 from app.services.user_locks import user_execution_lock
 
 MAX_ACTIVE_SCHEDULES_PER_USER = 50
@@ -105,7 +105,7 @@ def _transfer_details(
 
 
 def _schedule_transfer_unlocked(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
     user_id: str,
@@ -168,25 +168,24 @@ def _schedule_transfer_unlocked(
             session.flush()
             session.add(transfer)
             session.flush()
-            add_transfer_job(
-                scheduler,
-                transfer,
-                session_factory,
-                settings,
+            scheduler.schedule(
+                transfer.transfer_id,
+                transfer.scheduled_for,
                 replace_existing=False,
             )
             job_registered = True
+            result = _transfer_details(setup, transfer)
             session.commit()
     except Exception:
         if job_registered:
-            remove_job_if_present(scheduler, transfer.transfer_id)
+            scheduler.remove(transfer.transfer_id)
         raise
 
-    return _transfer_details(setup, transfer)
+    return result
 
 
 def schedule_transfer(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
     user_id: str,
@@ -215,7 +214,7 @@ def schedule_transfer(
 
 
 def cancel_scheduled_transfer(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
     setup_id: str,
@@ -231,7 +230,7 @@ def cancel_scheduled_transfer(
 
 
 def _cancel_scheduled_transfer_locked(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
     setup_id: str,
@@ -250,15 +249,16 @@ def _cancel_scheduled_transfer_locked(
         setup.status = "deactivated"
         for transfer in pending:
             transfer.status = "cancelled"
+        transfer_ids = [transfer.transfer_id for transfer in pending]
         session.commit()
 
-    for transfer in pending:
-        remove_job_if_present(scheduler, transfer.transfer_id)
+    for transfer_id in transfer_ids:
+        scheduler.remove(transfer_id)
     return None
 
 
 def emergency_stop_user_transfers(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
     *,
@@ -283,7 +283,7 @@ def emergency_stop_user_transfers(
 
 
 def _emergency_stop_user_transfers_locked(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
     *,
@@ -320,11 +320,16 @@ def _emergency_stop_user_transfers_locked(
         session.commit()
 
     for transfer_id in transfer_ids:
-        remove_job_if_present(scheduler, transfer_id)
+        scheduler.remove(transfer_id)
     return len(transfer_ids)
 
 
-def resume_user_scheduling(user_id, session_token, session_factory, settings):
+def resume_user_scheduling(
+    user_id: str,
+    session_token: str,
+    session_factory: SessionFactory,
+    settings: Settings,
+) -> None:
     with user_execution_lock(user_id):
         if decode_user_id(session_token, settings, session_factory) != user_id:
             raise SessionAuthenticationError

@@ -116,9 +116,9 @@ def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
         "executed_at": None,
         "status": "pending",
     }
-    assert called["scheduler"] is client.app.state.scheduler
-    assert called["session_factory"] is client.app.state.session_factory
-    assert called["settings"] is client.app.state.settings
+    assert called["scheduler"] is client.app.state.resources.transfer_jobs
+    assert called["session_factory"] is client.app.state.resources.session_factory
+    assert called["settings"] is client.app.state.resources.settings
     assert called["user_id"] == "user_123"
     assert isinstance(called["request"], ScheduleTransferCommand)
     assert called["request"].transfer_type == "withdraw"
@@ -203,7 +203,7 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
         "limit": 20,
         "offset": 2,
     }
-    assert called["session_factory"] is client.app.state.session_factory
+    assert called["session_factory"] is client.app.state.resources.session_factory
     assert called["user_id"] == "user_123"
     assert called["account_id"] == "account-123"
     assert called["pot_id"] == "pot-123"
@@ -284,7 +284,7 @@ def test_monzo_callback_rejects_unknown_state(client):
 
 
 def test_monzo_callback_rejects_expired_state(client):
-    state = create_oauth_state(client.app.state.settings, now=time() - 601)
+    state = create_oauth_state(client.app.state.resources.settings, now=time() - 601)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
 
@@ -294,7 +294,7 @@ def test_monzo_callback_rejects_expired_state(client):
 def test_monzo_callback_requires_both_credentials(settings):
     settings = replace(settings, monzo_client_secret="")
     with _client_for_settings(settings) as client:
-        state = create_oauth_state(client.app.state.settings)
+        state = create_oauth_state(client.app.state.resources.settings)
         client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
         response = client.get(
             "/monzo-callback", params={"code": "code", "state": state}
@@ -316,10 +316,12 @@ def test_monzo_callback_rejects_incomplete_token_payload(
     monkeypatch, client, token_response
 ):
     async def fake_exchange(self, code, settings):
-        return token_response
+        from app.domain.monzo import MonzoTokenResponse
+
+        return MonzoTokenResponse.model_validate(token_response)
 
     monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fake_exchange)
-    state = create_oauth_state(client.app.state.settings)
+    state = create_oauth_state(client.app.state.resources.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
 
@@ -353,7 +355,7 @@ def test_monzo_callback_maps_upstream_errors(
         raise failure
 
     monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fail_exchange)
-    state = create_oauth_state(client.app.state.settings)
+    state = create_oauth_state(client.app.state.resources.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
 
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
@@ -361,5 +363,8 @@ def test_monzo_callback_maps_upstream_errors(
     assert response.status_code == expected_status
     assert response.json()["detail"] == expected_detail
     assert not consume_oauth_state(
-        state, state, client.app.state.settings, client.app.state.session_factory
+        state,
+        state,
+        client.app.state.resources.settings,
+        client.app.state.resources.session_factory,
     )

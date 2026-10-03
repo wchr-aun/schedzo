@@ -30,9 +30,7 @@ router = APIRouter(tags=["monzo"])
 logger = logging.getLogger("schedzo.oauth")
 
 
-def _token_pair_response(
-    token_pair: AppTokenPair, settings: Settings
-) -> dict[str, str | int]:
+def _token_pair_response(token_pair: AppTokenPair) -> dict[str, str | int]:
     return {
         "token": token_pair.access_token,
         "expiresIn": token_pair.expires_in,
@@ -135,7 +133,6 @@ async def monzo_callback(
         raise HTTPException(
             status_code=502, detail="Monzo returned an invalid token response"
         ) from exc
-
     except MonzoDisconnectPendingError:
         raise HTTPException(
             status_code=409,
@@ -153,7 +150,7 @@ async def monzo_callback(
 
     response = JSONResponse(
         {
-            **_token_pair_response(token_pair, settings),
+            **_token_pair_response(token_pair),
         },
         headers={
             "Cache-Control": "no-store",
@@ -166,11 +163,14 @@ async def monzo_callback(
 
 
 @router.post("/auth/refresh")
-def refresh_app_session(body: AppRefreshRequest, request: Request):
-    settings = request.app.state.settings
+def refresh_app_session(
+    body: AppRefreshRequest,
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
+):
     try:
         token_pair = rotate_app_refresh_token(
-            body.refresh_token, request.app.state.session_factory, settings
+            body.refresh_token, session_factory, settings
         )
     except AppSessionQuotaError:
         raise HTTPException(
@@ -189,6 +189,6 @@ def refresh_app_session(body: AppRefreshRequest, request: Request):
         )
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
     return JSONResponse(
-        _token_pair_response(token_pair, settings),
+        _token_pair_response(token_pair),
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )

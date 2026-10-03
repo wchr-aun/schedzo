@@ -1,15 +1,18 @@
 """Remove obsolete authentication records while preserving transfer history."""
 
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import delete, select, or_
+
+from sqlalchemy import delete, or_, select
+
 from app.db.models import (
     AppSession,
-    UsedAppRefreshToken,
     ConsumedOAuthState,
+    UsedAppRefreshToken,
 )
+from app.db.session import SessionFactory
 
 
-def prune_history(session_factory):
+def prune_history(session_factory: SessionFactory) -> None:
     now = datetime.now(timezone.utc)
     with session_factory() as session:
         expired_sessions = select(AppSession.session_id).where(

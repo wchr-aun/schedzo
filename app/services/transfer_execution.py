@@ -1,38 +1,30 @@
 """Claim, execute, and finalize individual transfer occurrences."""
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Literal
 
-import httpx
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
-
-from app.domain.recurrence import Recurrence, next_occurrence
-from app.domain.transfers import TransferExecution, TransferInterval, TransferType
-from app.observability import monzo_error_details
-from app.services.monzo_credentials import resolve_monzo_access_token
-from app.services.monzo import MonzoClient, monzo_client_scope
-from app.services.notifications import notify_transfer_result, pot_name
-from app.services.scheduler import add_transfer_job, remove_job_if_present
-from app.services.user_locks import user_execution_lock
-
-from datetime import datetime, timezone
-
-from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import select
 
 from app.config import Settings
 from app.db.models import ScheduledTransfer, ScheduledTransferSetup
 from app.db.session import SessionFactory
-from app.domain.time import as_utc as _as_utc
-from app.observability import get_logger
+from app.domain.recurrence import Recurrence, next_occurrence
+from app.domain.scheduling import TransferJobs
+from app.domain.transfers import TransferExecution, TransferInterval, TransferType
+from app.observability import get_logger, monzo_error_details
+from app.services.monzo import MonzoClient, monzo_client_scope
+from app.services.monzo_credentials import resolve_monzo_access_token
+from app.services.notifications import notify_transfer_result, pot_name
+from app.services.user_locks import user_execution_lock
 
 logger = get_logger(__name__)
 
 
 def execute_scheduled_transfer(
     transfer_id: str,
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
 ) -> None:
@@ -77,7 +69,7 @@ def _transfer_user_id(transfer_id: str, session_factory: SessionFactory) -> str 
 
 async def _execute_scheduled_transfer(
     transfer_id: str,
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
 ) -> None:
@@ -89,7 +81,7 @@ async def _execute_scheduled_transfer(
 
 async def _execute_with_client(
     transfer_id: str,
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
     client: MonzoClient,
@@ -196,8 +188,7 @@ def _load_pending_execution(
                 transfer.status = "cancelled"
                 session.commit()
                 return None
-            session.commit()
-            return TransferExecution(
+            values = TransferExecution(
                 setup_id=setup.setup_id,
                 user_id=setup.user_id,
                 transfer_type=setup.transfer_type,
@@ -205,6 +196,8 @@ def _load_pending_execution(
                 pot_id=setup.pot_id,
                 account_id=setup.account_id,
             )
+            session.commit()
+            return values
     except SQLAlchemyError as exc:
         logger.error(
             "scheduled_transfer_storage_failed transfer_id=%s exception_type=%s",
@@ -217,7 +210,7 @@ def _load_pending_execution(
 def _finalize_occurrence(
     transfer_id: str,
     status: Literal["completed", "failed"],
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
 ) -> None:
@@ -246,18 +239,16 @@ def _finalize_occurrence(
                 )
                 session.add(next_transfer)
                 session.flush()
-                add_transfer_job(
-                    scheduler,
-                    next_transfer,
-                    session_factory,
-                    settings,
+                scheduler.schedule(
+                    next_transfer.transfer_id,
+                    next_transfer.scheduled_for,
                     replace_existing=False,
                 )
                 next_job_registered = True
             session.commit()
     except Exception:
         if next_job_registered and next_transfer is not None:
-            remove_job_if_present(scheduler, next_transfer.transfer_id)
+            scheduler.remove(next_transfer.transfer_id)
         raise
 
 

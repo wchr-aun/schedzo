@@ -1,20 +1,21 @@
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import select, func
+
+from sqlalchemy import func, select
 
 from app.db.models import (
     AppSession,
-    UsedAppRefreshToken,
-    ScheduledTransferSetup,
     ScheduledTransfer,
+    ScheduledTransferSetup,
+    UsedAppRefreshToken,
 )
 from app.services.maintenance import prune_history
 from app.services.sessions import rotate_app_refresh_token
-from tests.integration.test_security_races import login, BODY
+from tests.integration.test_security_races import BODY, login
 
 
 def test_cancelled_schedules_still_count_toward_creation_quota(client, settings):
     pair = login(client, settings)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add_all(
             [
                 ScheduledTransferSetup(
@@ -45,7 +46,7 @@ def test_refresh_quota_does_not_rotate_or_revoke_session(client, settings, monke
     pair = login(client, settings)
     monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
     rotated = rotate_app_refresh_token(
-        pair.refresh_token, client.app.state.session_factory, settings
+        pair.refresh_token, client.app.state.resources.session_factory, settings
     )
     response = client.post(
         "/auth/refresh", json={"refreshToken": rotated.refresh_token}
@@ -54,7 +55,7 @@ def test_refresh_quota_does_not_rotate_or_revoke_session(client, settings, monke
     monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 60)
     assert (
         rotate_app_refresh_token(
-            rotated.refresh_token, client.app.state.session_factory, settings
+            rotated.refresh_token, client.app.state.resources.session_factory, settings
         )
         is not None
     )
@@ -65,11 +66,11 @@ def test_pruning_removes_revoked_sessions_but_preserves_all_transfer_history(
 ):
     pair = login(client, settings)
     rotate_app_refresh_token(
-        pair.refresh_token, client.app.state.session_factory, settings
+        pair.refresh_token, client.app.state.resources.session_factory, settings
     )
     old = datetime.now(timezone.utc) - timedelta(days=3650)
     statuses = {"completed", "failed", "cancelled", "pending", "running"}
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.query(AppSession).one()
         row.revoked_at = old
         setup = ScheduledTransferSetup(
@@ -111,8 +112,8 @@ def test_pruning_removes_revoked_sessions_but_preserves_all_transfer_history(
             )
         )
         session.commit()
-    prune_history(client.app.state.session_factory)
-    with client.app.state.session_factory() as session:
+    prune_history(client.app.state.resources.session_factory)
+    with client.app.state.resources.session_factory() as session:
         assert session.scalar(select(func.count()).select_from(AppSession)) == 0
         assert (
             session.scalar(select(func.count()).select_from(UsedAppRefreshToken)) == 0
@@ -131,9 +132,9 @@ def test_pruning_removes_inactive_sessions_but_preserves_live_sessions(
 
     pair = login(client, settings)
     rotate_app_refresh_token(
-        pair.refresh_token, client.app.state.session_factory, settings
+        pair.refresh_token, client.app.state.resources.session_factory, settings
     )
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         inactive = session.query(AppSession).one()
         inactive.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         session.commit()
@@ -141,16 +142,16 @@ def test_pruning_removes_inactive_sessions_but_preserves_live_sessions(
             MonzoTokenResponse(
                 user_id="live-user", access_token="synthetic", expires_in=3600
             ),
-            client.app.state.session_factory,
+            client.app.state.resources.session_factory,
             settings,
         )
-    prune_history(client.app.state.session_factory)
-    with client.app.state.session_factory() as session:
+    prune_history(client.app.state.resources.session_factory)
+    with client.app.state.resources.session_factory() as session:
         assert session.query(AppSession).one().user_id == "live-user"
         assert session.query(UsedAppRefreshToken).count() == 0
     assert (
         rotate_app_refresh_token(
-            live.refresh_token, client.app.state.session_factory, settings
+            live.refresh_token, client.app.state.resources.session_factory, settings
         )
         is not None
     )

@@ -5,35 +5,44 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
-    Request,
     Response,
     status,
 )
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.dependencies import authenticated_session, monzo_session
-from app.domain.authentication import AuthenticationContext, MonzoSession
-from app.schemas.tasks import (
-    ScheduleTransferRequest,
-    ScheduledTransferResponse,
-    ScheduledTransfersPageResponse,
+from app.config import Settings
+from app.db.session import SessionFactory
+from app.dependencies import (
+    authenticated_session,
+    get_session_factory,
+    get_settings,
+    get_transfer_jobs,
+    monzo_session,
 )
-from app.domain.transfers import ScheduledTransferDetails, TransferStatus
-from app.services.schedules import (
+from app.domain.authentication import AuthenticationContext, MonzoSession
+from app.domain.errors import SessionAuthenticationError
+from app.domain.scheduling import TransferJobs
+from app.domain.transfers import (
     InvalidScheduleError,
-    SchedulingPausedError,
-    resume_user_scheduling,
+    ScheduledTransferDetails,
     ScheduleNotFoundError,
     ScheduleQuotaExceededError,
+    SchedulingPausedError,
+    TransferStatus,
+)
+from app.schemas.tasks import (
+    ScheduledTransferResponse,
+    ScheduledTransfersPageResponse,
+    ScheduleTransferRequest,
+)
+from app.services.disconnection import disconnect_user
+from app.services.schedules import (
     cancel_scheduled_transfer,
     list_scheduled_transfers,
+    resume_user_scheduling,
     schedule_transfer,
 )
-
-from app.domain.errors import SessionAuthenticationError
-
-from app.services.disconnection import disconnect_user
-from fastapi.responses import JSONResponse
 from app.services.sessions import logout_session
 
 router = APIRouter(tags=["tasks"])
@@ -48,15 +57,15 @@ DEFAULT_TRANSFER_STATUSES = (
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
-    request: Request,
     authentication: AuthenticationContext = Depends(authenticated_session),
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> Response:
-    user_id = authentication.user_id
     try:
         logout_session(
             authentication,
-            request.app.state.session_factory,
-            request.app.state.settings,
+            session_factory,
+            settings,
         )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None
@@ -70,14 +79,16 @@ def logout(
 @router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
 @router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
 def emergency_stop(
-    request: Request,
     authentication: AuthenticationContext = Depends(authenticated_session),
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
+    scheduler: TransferJobs = Depends(get_transfer_jobs),
 ) -> Response:
     try:
         disconnected = disconnect_user(
-            request.app.state.scheduler,
-            request.app.state.session_factory,
-            request.app.state.settings,
+            scheduler,
+            session_factory,
+            settings,
             authentication,
         )
     except SessionAuthenticationError:
@@ -117,7 +128,6 @@ def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
     response_model=ScheduledTransfersPageResponse,
 )
 def get_scheduled_transfers(
-    request: Request,
     status: Annotated[
         str | None,
         Query(description="Comma-separated transfer statuses"),
@@ -127,11 +137,12 @@ def get_scheduled_transfers(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     authentication: MonzoSession = Depends(monzo_session),
+    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> ScheduledTransfersPageResponse:
     statuses = _parse_transfer_statuses(status)
     try:
         page = list_scheduled_transfers(
-            request.app.state.session_factory,
+            session_factory,
             authentication.user_id,
             statuses=statuses,
             account_id=account_id,
@@ -156,14 +167,16 @@ def get_scheduled_transfers(
 @router.post("/schedule-transfer", response_model=ScheduledTransferResponse)
 def create_scheduled_transfer(
     transfer_request: ScheduleTransferRequest,
-    request: Request,
     authentication: MonzoSession = Depends(monzo_session),
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
+    scheduler: TransferJobs = Depends(get_transfer_jobs),
 ) -> ScheduledTransferResponse:
     try:
         transfer = schedule_transfer(
-            request.app.state.scheduler,
-            request.app.state.session_factory,
-            request.app.state.settings,
+            scheduler,
+            session_factory,
+            settings,
             authentication.user_id,
             transfer_request.to_command(),
             session_token=authentication.session_token,
@@ -194,13 +207,14 @@ def create_scheduled_transfer(
 )
 def cancel_transfer_schedule(
     setup_id: str,
-    request: Request,
     authentication: MonzoSession = Depends(monzo_session),
+    session_factory: SessionFactory = Depends(get_session_factory),
+    scheduler: TransferJobs = Depends(get_transfer_jobs),
 ) -> Response:
     try:
         cancel_scheduled_transfer(
-            request.app.state.scheduler,
-            request.app.state.session_factory,
+            scheduler,
+            session_factory,
             authentication.user_id,
             setup_id,
         )
@@ -219,16 +233,17 @@ def cancel_transfer_schedule(
 
 @router.post("/resume-transfers", status_code=204)
 def resume_transfers(
-    request: Request,
     authentication: AuthenticationContext = Depends(authenticated_session),
-):
+    settings: Settings = Depends(get_settings),
+    session_factory: SessionFactory = Depends(get_session_factory),
+) -> Response:
     user_id = authentication.user_id
     try:
         resume_user_scheduling(
             user_id,
             authentication.session_token,
-            request.app.state.session_factory,
-            request.app.state.settings,
+            session_factory,
+            settings,
         )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None

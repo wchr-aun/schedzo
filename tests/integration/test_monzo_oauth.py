@@ -1,5 +1,5 @@
-from urllib.parse import parse_qs, urlparse
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt
@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.db.models import MonzoCredential
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.token_crypto import decrypt_token
 from app.services.sessions import issue_app_session
+from app.services.token_crypto import decrypt_token
 
 
 def test_oauth_state_is_bound_to_the_browser_cookie(client):
@@ -71,7 +71,7 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     from app.services.oauth_state import consume_oauth_state
 
     assert not consume_oauth_state(
-        state, state, settings, client.app.state.session_factory
+        state, state, settings, client.app.state.resources.session_factory
     )
     jwt_claims = jwt.decode(
         response_body["token"], settings.jwt_secret_key, algorithms=["HS256"]
@@ -79,7 +79,7 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     assert jwt_claims["sub"] == "user_test123"
     assert "access_token" not in callback.text
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         credential = session.get(MonzoCredential, "user_test123")
         assert credential is not None
         assert decrypt_token(credential.access_token, settings) == "test-access-token"
@@ -104,7 +104,7 @@ def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
             refresh_token="test-monzo-refresh-token",
             expires_in=21600,
         ),
-        client.app.state.session_factory,
+        client.app.state.resources.session_factory,
         settings,
     )
 
@@ -122,7 +122,7 @@ def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
     assert all(response.json() == successful for response in responses)
     from app.db.models import AppSession, UsedAppRefreshToken
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert session.query(UsedAppRefreshToken).count() == 1
         assert session.query(AppSession).one().revoked_at is None
     assert (
@@ -134,63 +134,71 @@ def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
 
 
 def test_older_refresh_reuse_revokes_after_multiple_rotations(client, settings):
-    from app.services.sessions import rotate_app_refresh_token
-    from app.services.authorization import decode_user_id, SessionAuthenticationError
     import pytest
+
+    from app.services.authorization import SessionAuthenticationError, decode_user_id
+    from app.services.sessions import rotate_app_refresh_token
 
     original = issue_app_session(
         MonzoTokenResponse(
             user_id="user_reuse", access_token="synthetic", expires_in=3600
         ),
-        client.app.state.session_factory,
+        client.app.state.resources.session_factory,
         settings,
     )
     second = rotate_app_refresh_token(
-        original.refresh_token, client.app.state.session_factory, settings
+        original.refresh_token, client.app.state.resources.session_factory, settings
     )
     third = rotate_app_refresh_token(
-        second.refresh_token, client.app.state.session_factory, settings
+        second.refresh_token, client.app.state.resources.session_factory, settings
     )
     assert (
-        rotate_app_refresh_token("x" * 64, client.app.state.session_factory, settings)
+        rotate_app_refresh_token(
+            "x" * 64, client.app.state.resources.session_factory, settings
+        )
         is None
     )
     assert (
-        decode_user_id(third.access_token, settings, client.app.state.session_factory)
+        decode_user_id(
+            third.access_token, settings, client.app.state.resources.session_factory
+        )
         == "user_reuse"
     )
     assert (
         rotate_app_refresh_token(
-            original.refresh_token, client.app.state.session_factory, settings
+            original.refresh_token, client.app.state.resources.session_factory, settings
         )
         is None
     )
     assert (
         rotate_app_refresh_token(
-            third.refresh_token, client.app.state.session_factory, settings
+            third.refresh_token, client.app.state.resources.session_factory, settings
         )
         is None
     )
     with pytest.raises(SessionAuthenticationError):
-        decode_user_id(third.access_token, settings, client.app.state.session_factory)
+        decode_user_id(
+            third.access_token, settings, client.app.state.resources.session_factory
+        )
 
 
 def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
     client, settings
 ):
     from datetime import datetime, timedelta, timezone
+
     from app.db.models import AppSession, UsedAppRefreshToken
-    from app.services.sessions import rotate_app_refresh_token
-    from app.services.token_crypto import hash_refresh_token
     from app.services.authorization import decode_user_id
     from app.services.maintenance import prune_history
+    from app.services.sessions import rotate_app_refresh_token
+    from app.services.token_crypto import hash_refresh_token
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         pair = issue_app_session(
             MonzoTokenResponse(
                 user_id="expiry-user", access_token="synthetic", expires_in=3600
             ),
-            client.app.state.session_factory,
+            client.app.state.resources.session_factory,
             settings,
         )
         row = session.query(AppSession).filter_by(user_id="expiry-user").one()
@@ -210,11 +218,11 @@ def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
         )
         session.commit()
     assert pair.refresh_expires_in == 60 * 86400
-    prune_history(client.app.state.session_factory)
+    prune_history(client.app.state.resources.session_factory)
     response = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
     assert response.status_code == 200
     assert response.json()["refreshExpiresIn"] == 60 * 86400
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.query(AppSession).filter_by(user_id="expiry-user").one()
         assert row.expires_at == row.updated_at + timedelta(days=60)
         assert row.expires_at > datetime.now(timezone.utc).replace(
@@ -224,16 +232,18 @@ def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
     assert response.json()["expiresIn"] == settings.jwt_expiration_seconds
     assert (
         decode_user_id(
-            response.json()["token"], settings, client.app.state.session_factory
+            response.json()["token"],
+            settings,
+            client.app.state.resources.session_factory,
         )
         == "expiry-user"
     )
     duplicate = rotate_app_refresh_token(
-        pair.refresh_token, client.app.state.session_factory, settings
+        pair.refresh_token, client.app.state.resources.session_factory, settings
     )
     assert duplicate.refresh_token == response.json()["refreshToken"]
     assert duplicate.access_token == response.json()["token"]
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert (
             session.query(AppSession).filter_by(user_id="expiry-user").one().expires_at
             == refreshed_deadline
@@ -248,6 +258,7 @@ def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
 
 def test_expired_refresh_session_cannot_refresh_or_use_access_token(client, settings):
     from datetime import datetime, timedelta, timezone
+
     from app.db.models import AppSession
     from tests.integration.test_security_races import login
 
@@ -255,7 +266,7 @@ def test_expired_refresh_session_cannot_refresh_or_use_access_token(client, sett
     rotated = client.post(
         "/auth/refresh", json={"refreshToken": pair.refresh_token}
     ).json()
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.query(AppSession).one()
         row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         session.commit()

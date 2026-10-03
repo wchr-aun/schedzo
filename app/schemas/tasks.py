@@ -6,7 +6,6 @@ from app.domain.transfers import (
     ScheduleTransferCommand,
     TransferInterval,
     TransferType,
-    TransferStatus,
     validate_uk_datetime,
 )
 

@@ -1,9 +1,9 @@
 """Transfer commands and results independent of API schemas and ORM models."""
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-import re
 
 from app.domain.time import UK_TIMEZONE
 

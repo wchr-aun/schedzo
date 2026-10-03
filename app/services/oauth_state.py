@@ -1,20 +1,22 @@
 """Browser-bound signed OAuth attempts with persistent single-use consumption."""
 
-from datetime import datetime, timedelta, timezone
-from hashlib import sha256
 import hmac
 import secrets
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from time import time
 
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
+from app.config import Settings
 from app.db.models import ConsumedOAuthState
+from app.db.session import SessionFactory
 
 OAUTH_STATE_TTL_SECONDS = 600
 
 
-def _signature(payload: str, settings) -> str:
+def _signature(payload: str, settings: Settings) -> str:
     return hmac.new(
         settings.jwt_secret_key.encode(),
         b"schedzo-oauth-state\x00" + payload.encode(),
@@ -22,12 +24,19 @@ def _signature(payload: str, settings) -> str:
     ).hexdigest()
 
 
-def create_oauth_state(settings, *, now=None):
+def create_oauth_state(settings: Settings, *, now: float | None = None) -> str:
     payload = f"{int(time() if now is None else now)}.{secrets.token_urlsafe(32)}"
     return f"{payload}.{_signature(payload, settings)}"
 
 
-def consume_oauth_state(state, cookie, settings, session_factory, *, now=None):
+def consume_oauth_state(
+    state: str,
+    cookie: str,
+    settings: Settings,
+    session_factory: SessionFactory,
+    *,
+    now: float | None = None,
+) -> bool:
     current = time() if now is None else now
     if (
         not cookie

@@ -1,9 +1,10 @@
+from pathlib import Path
+
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-from pathlib import Path
-from app.db.sqlite_security import configure_sqlite_security
 
+from app.db.sqlite_security import configure_sqlite_security
 
 type SessionFactory = sessionmaker[Session]
 

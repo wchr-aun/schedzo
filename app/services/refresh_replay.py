@@ -6,6 +6,9 @@ from threading import Lock
 from time import monotonic
 from weakref import WeakKeyDictionary
 
+from app.db.session import SessionFactory
+from app.domain.sessions import AppTokenPair
+
 REFRESH_REPLAY_WINDOW_SECONDS = 5
 MAX_CACHED_REFRESH_RESPONSES = 4096
 
@@ -14,23 +17,30 @@ MAX_CACHED_REFRESH_RESPONSES = 4096
 class _Response:
     predecessor_hash: str
     successor_hash: str
-    pair: object = field(repr=False)
+    pair: AppTokenPair = field(repr=False)
     deadline: float
 
 
 class RefreshReplayCache:
-    def __init__(self):
-        self._responses = OrderedDict()
+    def __init__(self) -> None:
+        self._responses: OrderedDict[str, _Response] = OrderedDict()
         self._lock = Lock()
 
-    def _prune(self, now):
+    def _prune(self, now: float) -> None:
         # Access-token lifetimes can shorten the replay window, so deadlines
         # are not necessarily ordered by insertion time.
         for session_id, response in list(self._responses.items()):
             if response.deadline <= now:
                 del self._responses[session_id]
 
-    def record(self, session_id, predecessor_hash, successor_hash, pair, lifetime):
+    def record(
+        self,
+        session_id: str,
+        predecessor_hash: str,
+        successor_hash: str,
+        pair: AppTokenPair,
+        lifetime: float,
+    ) -> None:
         with self._lock:
             now = monotonic()
             self._prune(now)
@@ -46,7 +56,9 @@ class RefreshReplayCache:
                 now + min(lifetime, REFRESH_REPLAY_WINDOW_SECONDS),
             )
 
-    def lookup(self, session_id, predecessor_hash, current_hash):
+    def lookup(
+        self, session_id: str, predecessor_hash: str, current_hash: str
+    ) -> AppTokenPair | None:
         with self._lock:
             self._prune(monotonic())
             response = self._responses.get(session_id)
@@ -58,16 +70,16 @@ class RefreshReplayCache:
                 return response.pair
         return None
 
-    def discard(self, session_id):
+    def discard(self, session_id: str) -> None:
         with self._lock:
             self._responses.pop(session_id, None)
 
 
-_caches = WeakKeyDictionary()
+_caches: WeakKeyDictionary[SessionFactory, RefreshReplayCache] = WeakKeyDictionary()
 _cache_lock = Lock()
 
 
-def refresh_replay_cache(session_factory):
+def refresh_replay_cache(session_factory: SessionFactory) -> RefreshReplayCache:
     # Scope results to this application's database/session factory. Never return
     # another app's tokens or persist recoverable app refresh tokens in SQLite.
     with _cache_lock:

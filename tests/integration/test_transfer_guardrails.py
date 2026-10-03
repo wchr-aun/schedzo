@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 import httpx
 
 from app.db.models import AppSession, ScheduledTransfer
-from app.services.transfer_execution import execute_scheduled_transfer
 from app.services.sessions import rotate_app_refresh_token
-from tests.integration.test_security_races import login, BODY
+from app.services.transfer_execution import execute_scheduled_transfer
+from tests.integration.test_security_races import BODY, login
 
 
 def test_large_transfers_are_accepted_but_storage_overflow_is_rejected(
@@ -31,12 +31,12 @@ def test_large_transfers_are_accepted_but_storage_overflow_is_rejected(
 
 def test_old_login_can_create_and_resume_with_valid_session(client, settings):
     pair = login(client, settings)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.query(AppSession).one()
         row.created_at = datetime.now(timezone.utc) - timedelta(days=100)
         session.commit()
     rotated = rotate_app_refresh_token(
-        pair.refresh_token, client.app.state.session_factory, settings
+        pair.refresh_token, client.app.state.resources.session_factory, settings
     )
     headers = {"Authorization": f"Bearer {rotated.access_token}"}
     assert (
@@ -51,7 +51,7 @@ def test_execution_has_no_application_monetary_budget(client, settings, monkeypa
     body = {**BODY, "amount": 600_000}
     first = client.post("/schedule-transfer", headers=headers, json=body).json()
     second = client.post("/schedule-transfer", headers=headers, json=body).json()
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         previous = session.get(ScheduledTransfer, first["transfer_id"])
         previous.status = "completed"
         previous.executed_at = datetime.now(timezone.utc)
@@ -78,13 +78,13 @@ def test_execution_has_no_application_monetary_budget(client, settings, monkeypa
     )
     execute_scheduled_transfer(
         second["transfer_id"],
-        client.app.state.scheduler,
-        client.app.state.session_factory,
+        client.app.state.resources.transfer_jobs,
+        client.app.state.resources.session_factory,
         settings,
     )
     withdrawal.assert_awaited_once()
     assert withdrawal.call_args.args[3] == 600_000
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert (
             session.get(ScheduledTransfer, second["transfer_id"]).status == "completed"
         )

@@ -4,7 +4,6 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.db.session import SessionFactory
-from app.domain.monzo import MonzoTokenResponse
 from app.domain.sessions import AppTokenPair
 from app.services.monzo import MonzoClient
 from app.services.sessions import issue_app_session
@@ -28,8 +27,8 @@ class OAuthService:
     async def complete_monzo_login(self, code: str) -> AppTokenPair:
         """Exchange an authorization code and persist an application session."""
         try:
-            token_response = MonzoTokenResponse.model_validate(
-                await self._client.exchange_authorization_code(code, self._settings)
+            token_response = await self._client.exchange_authorization_code(
+                code, self._settings
             )
         except ValidationError, ValueError:
             raise OAuthTokenResponseError from None

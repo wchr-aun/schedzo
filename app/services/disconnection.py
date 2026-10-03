@@ -2,20 +2,21 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+
 import httpx
 from sqlalchemy import select
 
 from app.config import Settings
+from app.db.models import MonzoCredential
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext
+from app.domain.scheduling import TransferJobs
 from app.domain.time import as_utc
-from apscheduler.schedulers.background import BackgroundScheduler
-from app.services.schedules import emergency_stop_user_transfers
-from app.db.models import MonzoCredential
 from app.observability import get_logger
-from app.services.monzo_credentials import monzo_refresh_lock
 from app.services.monzo import MonzoClient, monzo_client_scope
-from app.services.token_crypto import encrypt_token, decrypt_token
+from app.services.monzo_credentials import monzo_refresh_lock
+from app.services.schedules import emergency_stop_user_transfers
+from app.services.token_crypto import decrypt_token, encrypt_token
 from app.services.user_locks import user_execution_lock
 
 logger = get_logger(__name__)
@@ -122,7 +123,7 @@ def retry_pending_disconnections(
 
 
 def disconnect_user(
-    scheduler: BackgroundScheduler,
+    scheduler: TransferJobs,
     session_factory: SessionFactory,
     settings: Settings,
     authentication: AuthenticationContext,

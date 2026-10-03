@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from hashlib import sha256
+from typing import overload
 
 import jwt
 from cryptography.fernet import Fernet
@@ -34,12 +35,28 @@ def encode_access_token(
     )
 
 
+@overload
+def encrypt_token(value: str, settings: Settings) -> str: ...
+
+
+@overload
+def encrypt_token(value: None, settings: Settings) -> None: ...
+
+
 def encrypt_token(value: str | None, settings: Settings) -> str | None:
     if value is None:
         return None
     return (
         Fernet(settings.token_encryption_key.encode()).encrypt(value.encode()).decode()
     )
+
+
+@overload
+def decrypt_token(value: str, settings: Settings) -> str: ...
+
+
+@overload
+def decrypt_token(value: None, settings: Settings) -> None: ...
 
 
 def decrypt_token(value: str | None, settings: Settings) -> str | None:

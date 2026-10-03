@@ -6,9 +6,9 @@ from fastapi.responses import JSONResponse
 from app.dependencies import get_resource_service, monzo_access_token
 from app.domain.monzo_errors import (
     MonzoError,
-    MonzoUnavailableError,
     MonzoInvalidResponseError,
     MonzoRequestError,
+    MonzoUnavailableError,
 )
 from app.schemas.monzo import (
     AccountsWithBalancesResponse,

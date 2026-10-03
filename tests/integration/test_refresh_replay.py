@@ -48,7 +48,7 @@ def test_duplicates_do_not_use_rotation_quota(client, settings, monkeypatch):
     retry = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
     assert retry.status_code == 200
     assert retry.json() == first.json()
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert session.query(UsedAppRefreshToken).count() == 1
         assert session.query(AppSession).one().revoked_at is None
     assert (
@@ -83,11 +83,13 @@ def test_new_factory_does_not_replay_another_app_cache(client, settings):
     pair = login(client, settings)
     assert (
         rotate_app_refresh_token(
-            pair.refresh_token, client.app.state.session_factory, settings
+            pair.refresh_token, client.app.state.resources.session_factory, settings
         )
         is not None
     )
-    restarted_factory = create_session_factory(client.app.state.database_engine)
+    restarted_factory = create_session_factory(
+        client.app.state.resources.database_engine
+    )
     assert (
         rotate_app_refresh_token(pair.refresh_token, restarted_factory, settings)
         is None
