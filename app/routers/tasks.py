@@ -21,7 +21,7 @@ from app.schemas.tasks import (
     ScheduledTransfersPageResponse,
 )
 from app.domain.transfers import ScheduledTransferDetails, TransferStatus
-from app.services.scheduler import (
+from app.services.schedules import (
     InvalidScheduleError,
     SchedulingPausedError,
     resume_user_scheduling,

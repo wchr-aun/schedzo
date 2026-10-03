@@ -7,7 +7,7 @@ from sqlalchemy import select, func
 from app.db.models import ScheduledTransferSetup
 from app.schemas.monzo import MonzoTokenResponse
 from app.services.token_store import save_monzo_tokens
-from app.services.scheduler import schedule_transfer
+from app.services.schedules import schedule_transfer
 
 BODY = {
     "datetime": "2030-01-01T10:00:00Z",

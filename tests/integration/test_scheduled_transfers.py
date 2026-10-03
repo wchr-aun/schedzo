@@ -14,7 +14,7 @@ from app.db.models import (
     ScheduledTransferSetup,
 )
 from app.domain.time import UK_TIMEZONE
-from app.services.scheduler import execute_scheduled_transfer
+from app.services.transfer_execution import execute_scheduled_transfer
 from app.services.token_store import encrypt_token
 from app.services.monzo import deposit_into_pot
 

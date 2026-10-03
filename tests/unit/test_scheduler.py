@@ -11,11 +11,9 @@ from app.config import Settings
 from app.db.models import Base, ScheduledTransfer, ScheduledTransferSetup
 from app.domain.recurrence import Recurrence, next_occurrence as _next_occurrence
 from app.domain.transfers import ScheduleTransferCommand, TransferInterval, TransferType
-from app.services.scheduler import (
-    execute_scheduled_transfer,
-    restore_scheduled_transfers,
-    schedule_transfer,
-)
+from app.services.transfer_execution import execute_scheduled_transfer
+from app.services.scheduler import restore_scheduled_transfers
+from app.services.schedules import schedule_transfer
 
 UK_TIMEZONE = ZoneInfo("Europe/London")
 
@@ -231,4 +229,88 @@ def test_recovery_schedules_overdue_transfer_for_immediate_execution(
         misfire_grace_time=None,
     )
 
+    engine.dispose()
+
+
+@pytest.mark.parametrize("failure_point", ["registration", "commit"])
+def test_creation_failure_leaves_no_schedule_or_orphan_job(tmp_path, failure_point):
+    from sqlalchemy.orm import Session
+
+    class FailingSession(Session):
+        def commit(self):
+            raise RuntimeError("commit failed")
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'failure.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(
+        bind=engine,
+        expire_on_commit=False,
+        class_=FailingSession if failure_point == "commit" else Session,
+    )
+    scheduler = Mock()
+    if failure_point == "registration":
+        scheduler.add_job.side_effect = RuntimeError("registration failed")
+    command = ScheduleTransferCommand(
+        datetime(2030, 1, 1, 9, tzinfo=timezone.utc),
+        TransferInterval.DAILY,
+        TransferType.DEPOSIT,
+        100,
+        "pot",
+        "account",
+    )
+    with pytest.raises(RuntimeError, match="failed"):
+        schedule_transfer(
+            scheduler,
+            factory,
+            Settings("client", "secret", "http://localhost"),
+            "user",
+            command,
+            now=datetime(2029, 1, 1, tzinfo=timezone.utc),
+        )
+    with factory() as session:
+        assert session.query(ScheduledTransferSetup).count() == 0
+        assert session.query(ScheduledTransfer).count() == 0
+    if failure_point == "commit":
+        scheduler.remove_job.assert_called_once_with(
+            scheduler.add_job.call_args.kwargs["id"]
+        )
+    else:
+        scheduler.remove_job.assert_not_called()
+    engine.dispose()
+
+
+def test_claim_and_restart_keep_the_same_occurrence_identity(tmp_path):
+    from app.services.transfer_execution import _load_pending_execution
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'recovery.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    setup = _monthly_setup(31)
+    with factory() as session:
+        session.add(setup)
+        session.flush()
+        session.add(
+            ScheduledTransfer(
+                transfer_id="stable-dedupe-id",
+                setup_id=setup.setup_id,
+                scheduled_for=datetime(2030, 1, 31, 9, 15, tzinfo=timezone.utc),
+                status="pending",
+            )
+        )
+        session.commit()
+    assert _load_pending_execution("stable-dedupe-id", factory) is not None
+    assert _load_pending_execution("stable-dedupe-id", factory) is None
+    scheduler = Mock()
+    assert (
+        restore_scheduled_transfers(
+            scheduler,
+            factory,
+            Settings("client", "secret", "http://localhost"),
+        )
+        == 1
+    )
+    assert scheduler.add_job.call_args.kwargs["id"] == "stable-dedupe-id"
+    with factory() as session:
+        assert session.get(ScheduledTransfer, "stable-dedupe-id").status == "pending"
+        assert session.query(ScheduledTransfer).count() == 1
     engine.dispose()

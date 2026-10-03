@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import httpx
 
 from app.db.models import AppSession, ScheduledTransfer
-from app.services.scheduler import execute_scheduled_transfer
+from app.services.transfer_execution import execute_scheduled_transfer
 from app.services.token_store import rotate_app_refresh_token
 from tests.integration.test_security_races import login, BODY
 
@@ -65,9 +65,9 @@ def test_execution_has_no_application_monetary_budget(client, settings, monkeypa
             ),
         )
     )
-    monkeypatch.setattr("app.services.scheduler.withdraw_from_pot", withdrawal)
+    monkeypatch.setattr("app.services.transfer_execution.withdraw_from_pot", withdrawal)
     monkeypatch.setattr(
-        "app.services.scheduler.create_feed_item",
+        "app.services.notifications.create_feed_item",
         AsyncMock(
             return_value=httpx.Response(
                 200,

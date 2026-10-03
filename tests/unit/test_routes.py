@@ -16,7 +16,7 @@ from app.routers import monzo, tasks
 from app.dependencies import monzo_session
 from app.domain.authentication import MonzoSession
 from app.domain.transfers import ScheduleTransferCommand, ScheduledTransferDetails
-from app.services.scheduler import ScheduledTransfersPage
+from app.domain.transfers import ScheduledTransfersPage
 
 
 @contextmanager
