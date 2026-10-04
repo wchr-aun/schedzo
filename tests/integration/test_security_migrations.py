@@ -127,7 +127,10 @@ def test_first_login_and_schedule_work_with_hardened_foreign_keys(tmp_path, sett
 
     engine = create_database_engine(f"sqlite:///{tmp_path / 'hardened.db'}")
     Base.metadata.create_all(engine)
-    with TestClient(create_app(settings, engine=engine)) as client:
+    with TestClient(
+        create_app(settings, engine=engine),
+        headers={"X-BFF-API-Key": settings.bff_api_key},
+    ) as client:
         pair = issue_app_session(
             MonzoTokenResponse(
                 user_id="new-user", access_token="synthetic-token", expires_in=3600

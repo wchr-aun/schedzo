@@ -64,11 +64,15 @@ def test_production_fails_closed_for_insecure_configuration(
             pass
 
 
-def test_production_oauth_and_refresh_do_not_require_bff_headers(client, settings):
+def test_production_oauth_and_refresh_accept_valid_bff_header(client, settings):
     application = create_app(
         production(settings), engine=client.app.state.resources.database_engine
     )
-    with TestClient(application, base_url="https://testserver") as secure_client:
+    with TestClient(
+        application,
+        base_url="https://testserver",
+        headers={"X-BFF-API-Key": production(settings).bff_api_key},
+    ) as secure_client:
         redirect = secure_client.get("/monzo-redirect", follow_redirects=False)
         assert redirect.status_code == 302
         assert "Secure" in redirect.headers["set-cookie"]

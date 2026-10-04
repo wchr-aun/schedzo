@@ -36,7 +36,10 @@ def _client_for_settings(settings):
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    with TestClient(create_app(settings, engine=engine)) as client:
+    with TestClient(
+        create_app(settings, engine=engine),
+        headers={"X-BFF-API-Key": settings.bff_api_key},
+    ) as client:
         yield client
     engine.dispose()
 
