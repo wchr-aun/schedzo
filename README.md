@@ -215,8 +215,28 @@ uv run python scripts/check_sensitive_files.py
 Integration tests mock Monzo with `respx` and run offline. The sensitive-file
 check inspects staged/tracked content, not unstaged changes or Git history.
 Declare dependency changes in `pyproject.toml` and update `uv.lock` with `uv lock`.
-Both security and deployment verification workflows install with `uv sync --frozen`
-and run the sensitive-file check and test suite.
+
+## Continuous integration and deployment
+
+[CI](.github/workflows/ci.yaml) runs on every push and pull request, and can also
+be started manually. On Ubuntu with Python 3.14 it checks that `uv.lock` matches
+`pyproject.toml`, installs the locked dependencies, checks installed dependency
+compatibility, and runs the full unit and integration suite and sensitive-file
+check. A separate job installs production dependencies only, applies migrations
+to a temporary SQLite database, and checks application startup and `/health` in
+production mode. CI generates temporary keys and needs no Monzo or deployment
+secrets. This service runs from source; it has no wheel or container build.
+
+Require the `Tests` and `Production readiness` checks, along with the existing
+`sensitive-files` check, in GitHub branch protection or a ruleset for `main` to
+prevent merging failing changes. Workflows report failures; required checks
+enforce the merge gate. When adding dependencies, commit both `pyproject.toml`
+and the updated `uv.lock`.
+
+The [deployment workflow](.github/workflows/deploy.yaml) reuses these CI jobs
+before deploying a tested commit from `main` to DigitalOcean. Configure the
+production environment and server prerequisites in the
+[deployment guide](docs/deployment-security.md) before enabling deployment.
 
 ## License
 

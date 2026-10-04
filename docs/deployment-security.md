@@ -4,7 +4,10 @@ The [deployment workflow](../.github/workflows/deploy.yaml) runs on pushes to
 `main` or manual dispatch; its deployment job runs only for `main`. It uses
 native OpenSSH, verifies the server host key, and receives
 SSH credentials in a job that runs no third-party actions. Build actions are
-pinned to reviewed commit IDs. Deployment waits for the test suite and deploys
+pinned to reviewed commit IDs. Deployment reuses the
+[CI workflow](../.github/workflows/ci.yaml), waiting for lockfile validation,
+dependency compatibility checks, the test suite, and a production-only
+installation/migration/startup check. It deploys
 only the tested SHA, using a fast-forward update with no reset of server files.
 
 Before enabling this workflow, configure the `production` GitHub environment
