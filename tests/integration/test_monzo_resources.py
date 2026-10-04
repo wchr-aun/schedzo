@@ -9,9 +9,9 @@ import pytest
 import respx
 
 from app.db.models import MonzoCredential
-from app.services.token_store import encrypt_token, decrypt_token
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.authorization import resolve_monzo_access_token
+from app.services.monzo_credentials import resolve_monzo_access_token
+from app.services.token_crypto import decrypt_token, encrypt_token
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -25,12 +25,16 @@ def _session_token(settings, user_id="user_test123"):
 
 def _save_credential(client, *, expired=False):
     now = datetime.now(timezone.utc)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token=encrypt_token("test-access-token", client.app.state.settings),
-                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
+                access_token=encrypt_token(
+                    "test-access-token", client.app.state.resources.settings
+                ),
+                refresh_token=encrypt_token(
+                    "test-refresh-token", client.app.state.resources.settings
+                ),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=-1 if expired else 1),
                 updated_at=now,
@@ -309,9 +313,7 @@ def test_accounts_sanitizes_unapproved_monzo_error(client, settings, caplog):
     assert "monzo_message='upstream_error'" in caplog.text
 
 
-def test_accounts_with_balances_only_returns_fields_in_service_schema(
-    client, settings
-):
+def test_accounts_with_balances_only_returns_fields_in_service_schema(client, settings):
     _save_credential(client)
     with respx.mock(assert_all_called=True) as monzo_mock:
         monzo_mock.get("https://api.monzo.com/accounts").mock(
@@ -422,7 +424,9 @@ def test_accounts_with_balances_tolerates_all_balance_requests_failing(
         ]
     }
     assert "monzo_request_failed operation=balance upstream_status=403" in caplog.text
-    assert "monzo_request_failed operation=balance reason=monzo_unreachable" in caplog.text
+    assert (
+        "monzo_request_failed operation=balance reason=monzo_unreachable" in caplog.text
+    )
 
 
 def test_accounts_rejects_invalid_monzo_response(client, settings, caplog):
@@ -475,7 +479,7 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
         "client_secret": [settings.monzo_client_secret],
         "refresh_token": ["test-refresh-token"],
     }
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         credential = session.get(MonzoCredential, "user_test123")
         assert decrypt_token(credential.access_token, settings) == "new-access-token"
         assert decrypt_token(credential.refresh_token, settings) == "new-refresh-token"
@@ -485,7 +489,7 @@ def test_concurrent_expired_token_requests_refresh_once(client, settings, monkey
     _save_credential(client, expired=True)
     calls = 0
 
-    async def refresh(refresh_token, configured_settings):
+    async def refresh(self, refresh_token, configured_settings):
         nonlocal calls
         calls += 1
         await asyncio.sleep(0.01)
@@ -496,14 +500,15 @@ def test_concurrent_expired_token_requests_refresh_once(client, settings, monkey
             expires_in=3600,
         )
 
-    monkeypatch.setattr("app.services.authorization.refresh_access_token", refresh)
+    monkeypatch.setattr("app.services.monzo.MonzoClient.refresh_access_token", refresh)
+
     async def resolve_twice():
         return await asyncio.gather(
             resolve_monzo_access_token(
-                "user_test123", client.app.state.session_factory, settings
+                "user_test123", client.app.state.resources.session_factory, settings
             ),
             resolve_monzo_access_token(
-                "user_test123", client.app.state.session_factory, settings
+                "user_test123", client.app.state.resources.session_factory, settings
             ),
         )
 

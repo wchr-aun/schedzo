@@ -5,6 +5,16 @@ savings-pot deposits and withdrawals. It uses SQLite, SQLAlchemy, Alembic, and
 APScheduler. Run one application worker: the scheduler, user locks, request
 limits, and refresh retry cache are process-local.
 
+## Architecture
+
+Routes handle HTTP concerns, application services coordinate workflows, and
+`app/domain/` contains reusable commands, results, and recurrence rules. Shared
+resources are typed and owned by the application lifespan. Routers receive resource
+and OAuth services through dependency injection; provider clients stay inside
+services and composition code. See
+[the architecture guide](docs/architecture.md) for module responsibilities,
+transaction boundaries, and HTTP client ownership.
+
 ## Local setup
 
 Install [uv](https://docs.astral.sh/uv/), then install the locked dependencies:

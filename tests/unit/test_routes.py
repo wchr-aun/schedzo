@@ -2,7 +2,6 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from time import time
-from app.services.oauth_state import create_oauth_state, consume_oauth_state
 
 import httpx
 import pytest
@@ -11,11 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base
+from app.dependencies import monzo_session
+from app.domain.authentication import MonzoSession
+from app.domain.transfers import (
+    ScheduledTransferDetails,
+    ScheduledTransfersPage,
+    ScheduleTransferCommand,
+)
 from app.main import create_app
-from app.routers import monzo, tasks
-from app.routers.resources import MonzoSession, monzo_session
-from app.schemas.tasks import ScheduleTransferRequest
-from app.services.scheduler import ScheduledTransfersPage
+from app.routers import tasks
+from app.services.monzo import MonzoClient
+from app.services.oauth_state import consume_oauth_state, create_oauth_state
 
 
 @contextmanager
@@ -57,30 +62,18 @@ def test_health_route_adds_hsts_over_https(client):
 
 def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
     scheduled_for = datetime(2030, 1, 1, 9, 30, tzinfo=timezone.utc)
-    setup = type(
-        "Setup",
-        (),
-        {
-            "setup_id": "setup-123",
-            "interval": "weekly",
-            "transfer_type": "withdraw",
-            "amount": 500,
-            "status": "active",
-        },
-    )()
-    transfer = type(
-        "Transfer",
-        (),
-        {
-            "transfer_id": "transfer-123",
-            "setup_id": "setup-123",
-            "scheduled_for": scheduled_for,
-            "created_at": scheduled_for,
-            "executed_at": None,
-            "status": "pending",
-        },
-    )()
-    job = type("Job", (), {"next_run_time": scheduled_for})()
+    transfer = ScheduledTransferDetails(
+        setup_id="setup-123",
+        transfer_id="transfer-123",
+        scheduled_for=scheduled_for,
+        created_at=scheduled_for,
+        interval="weekly",
+        transfer_type="withdraw",
+        amount=500,
+        setup_status="active",
+        status="pending",
+        executed_at=None,
+    )
     called = {}
 
     def fake_schedule(scheduler, session_factory, settings, user_id, request, **kwargs):
@@ -91,7 +84,7 @@ def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
             user_id=user_id,
             request=request,
         )
-        return setup, transfer, job
+        return transfer
 
     monkeypatch.setattr(tasks, "schedule_transfer", fake_schedule)
     client.app.dependency_overrides[monzo_session] = lambda: MonzoSession(
@@ -123,12 +116,12 @@ def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
         "executed_at": None,
         "status": "pending",
     }
-    assert called["scheduler"] is client.app.state.scheduler
-    assert called["session_factory"] is client.app.state.session_factory
-    assert called["settings"] is client.app.state.settings
+    assert called["scheduler"] is client.app.state.resources.transfer_jobs
+    assert called["session_factory"] is client.app.state.resources.session_factory
+    assert called["settings"] is client.app.state.resources.settings
     assert called["user_id"] == "user_123"
-    assert isinstance(called["request"], ScheduleTransferRequest)
-    assert called["request"].type == "withdraw"
+    assert isinstance(called["request"], ScheduleTransferCommand)
+    assert called["request"].transfer_type == "withdraw"
 
 
 def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
@@ -210,7 +203,7 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
         "limit": 20,
         "offset": 2,
     }
-    assert called["session_factory"] is client.app.state.session_factory
+    assert called["session_factory"] is client.app.state.resources.session_factory
     assert called["user_id"] == "user_123"
     assert called["account_id"] == "account-123"
     assert called["pot_id"] == "pot-123"
@@ -291,7 +284,7 @@ def test_monzo_callback_rejects_unknown_state(client):
 
 
 def test_monzo_callback_rejects_expired_state(client):
-    state = create_oauth_state(client.app.state.settings, now=time() - 601)
+    state = create_oauth_state(client.app.state.resources.settings, now=time() - 601)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
 
@@ -301,7 +294,7 @@ def test_monzo_callback_rejects_expired_state(client):
 def test_monzo_callback_requires_both_credentials(settings):
     settings = replace(settings, monzo_client_secret="")
     with _client_for_settings(settings) as client:
-        state = create_oauth_state(client.app.state.settings)
+        state = create_oauth_state(client.app.state.resources.settings)
         client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
         response = client.get(
             "/monzo-callback", params={"code": "code", "state": state}
@@ -322,11 +315,13 @@ def test_monzo_callback_requires_jwt_configuration(settings):
 def test_monzo_callback_rejects_incomplete_token_payload(
     monkeypatch, client, token_response
 ):
-    async def fake_exchange(code, settings):
-        return token_response
+    async def fake_exchange(self, code, settings):
+        from app.domain.monzo import MonzoTokenResponse
 
-    monkeypatch.setattr(monzo, "exchange_authorization_code", fake_exchange)
-    state = create_oauth_state(client.app.state.settings)
+        return MonzoTokenResponse.model_validate(token_response)
+
+    monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fake_exchange)
+    state = create_oauth_state(client.app.state.resources.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
 
@@ -356,11 +351,11 @@ def test_monzo_callback_rejects_incomplete_token_payload(
 def test_monzo_callback_maps_upstream_errors(
     monkeypatch, client, failure, expected_status, expected_detail
 ):
-    async def fail_exchange(code, settings):
+    async def fail_exchange(self, code, settings):
         raise failure
 
-    monkeypatch.setattr(monzo, "exchange_authorization_code", fail_exchange)
-    state = create_oauth_state(client.app.state.settings)
+    monkeypatch.setattr(MonzoClient, "exchange_authorization_code", fail_exchange)
+    state = create_oauth_state(client.app.state.resources.settings)
     client.cookies.set("monzo_oauth_state", state, path="/monzo-callback")
 
     response = client.get("/monzo-callback", params={"code": "code", "state": state})
@@ -368,5 +363,8 @@ def test_monzo_callback_maps_upstream_errors(
     assert response.status_code == expected_status
     assert response.json()["detail"] == expected_detail
     assert not consume_oauth_state(
-        state, state, client.app.state.settings, client.app.state.session_factory
+        state,
+        state,
+        client.app.state.resources.settings,
+        client.app.state.resources.session_factory,
     )

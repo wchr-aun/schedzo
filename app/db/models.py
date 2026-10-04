@@ -8,9 +8,9 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     SmallInteger,
     String,
-    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

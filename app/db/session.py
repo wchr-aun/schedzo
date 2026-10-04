@@ -1,8 +1,12 @@
+from pathlib import Path
+
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
-from pathlib import Path
+from sqlalchemy.orm import Session, sessionmaker
+
 from app.db.sqlite_security import configure_sqlite_security
+
+type SessionFactory = sessionmaker[Session]
 
 
 def create_database_engine(database_url: str) -> Engine:
@@ -23,5 +27,5 @@ def create_database_engine(database_url: str) -> Engine:
     return engine
 
 
-def create_session_factory(engine: Engine):
+def create_session_factory(engine: Engine) -> SessionFactory:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

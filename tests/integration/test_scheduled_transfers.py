@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
 import asyncio
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 from uuid import UUID
 
@@ -13,10 +13,10 @@ from app.db.models import (
     ScheduledTransfer,
     ScheduledTransferSetup,
 )
-from app.schemas.tasks import UK_TIMEZONE
-from app.services.scheduler import execute_scheduled_transfer
-from app.services.token_store import encrypt_token
-from app.services.monzo import deposit_into_pot
+from app.domain.time import UK_TIMEZONE
+from app.services.monzo import monzo_client_scope
+from app.services.token_crypto import encrypt_token
+from app.services.transfer_execution import execute_scheduled_transfer
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -30,12 +30,16 @@ def _session_token(settings, user_id="user_test123"):
 
 def _save_credential(client):
     now = datetime.now(timezone.utc)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token=encrypt_token("test-access-token", client.app.state.settings),
-                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
+                access_token=encrypt_token(
+                    "test-access-token", client.app.state.resources.settings
+                ),
+                refresh_token=encrypt_token(
+                    "test-refresh-token", client.app.state.resources.settings
+                ),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
                 updated_at=now,
@@ -44,9 +48,7 @@ def _save_credential(client):
         session.commit()
 
 
-def test_schedule_transfer_endpoint_persists_authenticated_users_task(
-    client, settings
-):
+def test_schedule_transfer_endpoint_persists_authenticated_users_task(client, settings):
     _save_credential(client)
     scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
         second=0, microsecond=0
@@ -78,7 +80,7 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
     assert body["setup_status"] == "active"
     assert body["executed_at"] is None
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         setup = session.get(ScheduledTransferSetup, body["setup_id"])
         transfer = session.get(ScheduledTransfer, body["transfer_id"])
         assert setup is not None
@@ -98,7 +100,9 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
-def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, settings):
+def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(
+    client, settings
+):
     _save_credential(client)
     token = _session_token(settings)
     headers = {"Authorization": f"Bearer {token}"}
@@ -123,8 +127,8 @@ def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, s
 
     assert stopped.status_code == 204
     assert old_session.status_code == 401
-    assert client.app.state.scheduler.get_job(created["transfer_id"]) is None
-    with client.app.state.session_factory() as session:
+    assert client.app.state.resources.scheduler.get_job(created["transfer_id"]) is None
+    with client.app.state.resources.session_factory() as session:
         setup = session.get(ScheduledTransferSetup, created["setup_id"])
         transfer = session.get(ScheduledTransfer, created["transfer_id"])
         assert setup.status == "deactivated"
@@ -134,7 +138,7 @@ def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, s
 def test_schedule_endpoint_enforces_active_schedule_quota(client, settings):
     _save_credential(client)
     now = datetime.now(timezone.utc)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add_all(
             [
                 ScheduledTransferSetup(
@@ -200,11 +204,14 @@ def test_schedule_endpoint_rejects_pot_ids_that_can_change_api_path(
 
 def test_monzo_deposit_rejects_legacy_traversal_ids_before_request():
     with pytest.raises(ValueError, match="Invalid Monzo resource identifier"):
-        asyncio.run(
-            deposit_into_pot(
-                "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
-            )
-        )
+
+        async def deposit():
+            async with monzo_client_scope() as client:
+                await client.deposit_into_pot(
+                    "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
+                )
+
+        asyncio.run(deposit())
 
 
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
@@ -212,11 +219,13 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
 ):
     _save_credential(client)
     now = datetime.now(timezone.utc)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add(
             MonzoCredential(
                 user_id="another-user",
-                access_token=encrypt_token("another-access-token", client.app.state.settings),
+                access_token=encrypt_token(
+                    "another-access-token", client.app.state.resources.settings
+                ),
                 refresh_token=None,
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
@@ -409,9 +418,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     assert resource_filtered_response.status_code == 200
     resource_filtered_body = resource_filtered_response.json()
     assert resource_filtered_body["total"] == 1
-    assert [
-        item["transfer_id"] for item in resource_filtered_body["items"]
-    ] == ["own-transfer"]
+    assert [item["transfer_id"] for item in resource_filtered_body["items"]] == [
+        "own-transfer"
+    ]
 
     combined_filtered_response = client.get(
         "/scheduled-transfers",
@@ -426,9 +435,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     assert combined_filtered_response.status_code == 200
     combined_filtered_body = combined_filtered_response.json()
     assert combined_filtered_body["total"] == 1
-    assert [
-        item["transfer_id"] for item in combined_filtered_body["items"]
-    ] == ["inactive-transfer"]
+    assert [item["transfer_id"] for item in combined_filtered_body["items"]] == [
+        "inactive-transfer"
+    ]
 
 
 def test_get_scheduled_transfers_requires_authentication(client):
@@ -470,7 +479,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
     _save_credential(client)
     setup_id = f"setup-{transfer_type}"
     transfer_id = f"transfer-{transfer_type}"
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add_all(
             [
                 ScheduledTransferSetup(
@@ -505,8 +514,8 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         )
         execute_scheduled_transfer(
             transfer_id,
-            client.app.state.scheduler,
-            client.app.state.session_factory,
+            client.app.state.resources.transfer_jobs,
+            client.app.state.resources.session_factory,
             settings,
         )
 
@@ -536,7 +545,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         ],
     }
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         completed = session.get(ScheduledTransfer, transfer_id)
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()
         assert completed is not None
@@ -546,9 +555,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         assert [item.status for item in transfers].count("pending") == 1
 
 
-def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
-    client, settings
-):
+def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(client, settings):
     _save_credential(client)
     scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
         second=0, microsecond=0
@@ -573,8 +580,8 @@ def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
 
     assert response.status_code == 204
     assert response.content == b""
-    assert client.app.state.scheduler.get_job(created["transfer_id"]) is None
-    with client.app.state.session_factory() as session:
+    assert client.app.state.resources.scheduler.get_job(created["transfer_id"]) is None
+    with client.app.state.resources.session_factory() as session:
         setup = session.get(ScheduledTransferSetup, created["setup_id"])
         transfer = session.get(ScheduledTransfer, created["transfer_id"])
         assert setup is not None
@@ -584,13 +591,11 @@ def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
         assert transfer.executed_at is None
 
 
-def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
-    client, settings
-):
+def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(client, settings):
     _save_credential(client)
     setup_id = "setup-failed"
     transfer_id = "transfer-failed"
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add_all(
             [
                 ScheduledTransferSetup(
@@ -629,8 +634,8 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
         with pytest.raises(httpx.HTTPStatusError):
             execute_scheduled_transfer(
                 transfer_id,
-                client.app.state.scheduler,
-                client.app.state.session_factory,
+                client.app.state.resources.transfer_jobs,
+                client.app.state.resources.session_factory,
                 settings,
             )
 
@@ -641,7 +646,7 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
         "https://monzo-scheduler-ui.vercel.app/account/acc_123/pot/pot_123"
     ]
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()
         failed = session.get(ScheduledTransfer, transfer_id)
         assert failed is not None
@@ -654,7 +659,7 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
 def test_three_executions_leave_three_completed_and_one_pending(client, settings):
     _save_credential(client)
     setup_id = "setup-repeated"
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         session.add_all(
             [
                 ScheduledTransferSetup(
@@ -688,20 +693,24 @@ def test_three_executions_leave_three_completed_and_one_pending(client, settings
             return_value=httpx.Response(200, json={})
         )
         for _ in range(3):
-            with client.app.state.session_factory() as session:
-                pending = session.query(ScheduledTransfer).filter_by(
-                    setup_id=setup_id,
-                    status="pending",
-                ).one()
+            with client.app.state.resources.session_factory() as session:
+                pending = (
+                    session.query(ScheduledTransfer)
+                    .filter_by(
+                        setup_id=setup_id,
+                        status="pending",
+                    )
+                    .one()
+                )
                 transfer_id = pending.transfer_id
             execute_scheduled_transfer(
                 transfer_id,
-                client.app.state.scheduler,
-                client.app.state.session_factory,
+                client.app.state.resources.transfer_jobs,
+                client.app.state.resources.session_factory,
                 settings,
             )
 
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()
         assert len(transfers) == 4
         assert [item.status for item in transfers].count("completed") == 3

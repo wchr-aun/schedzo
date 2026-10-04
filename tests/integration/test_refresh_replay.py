@@ -2,7 +2,7 @@ import pytest
 
 from app.db.models import AppSession, UsedAppRefreshToken
 from app.db.session import create_session_factory
-from app.services.token_store import rotate_app_refresh_token
+from app.services.sessions import rotate_app_refresh_token
 from tests.integration.test_security_races import login
 
 
@@ -42,13 +42,13 @@ def test_retries_do_not_extend_window_and_expired_reuse_revokes(
 
 def test_duplicates_do_not_use_rotation_quota(client, settings, monkeypatch):
     pair = login(client, settings)
-    monkeypatch.setattr("app.services.token_store.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
+    monkeypatch.setattr("app.services.sessions.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
     first = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
     assert first.status_code == 200
     retry = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
     assert retry.status_code == 200
     assert retry.json() == first.json()
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert session.query(UsedAppRefreshToken).count() == 1
         assert session.query(AppSession).one().revoked_at is None
     assert (
@@ -83,11 +83,13 @@ def test_new_factory_does_not_replay_another_app_cache(client, settings):
     pair = login(client, settings)
     assert (
         rotate_app_refresh_token(
-            pair.refresh_token, client.app.state.session_factory, settings
+            pair.refresh_token, client.app.state.resources.session_factory, settings
         )
         is not None
     )
-    restarted_factory = create_session_factory(client.app.state.database_engine)
+    restarted_factory = create_session_factory(
+        client.app.state.resources.database_engine
+    )
     assert (
         rotate_app_refresh_token(pair.refresh_token, restarted_factory, settings)
         is None

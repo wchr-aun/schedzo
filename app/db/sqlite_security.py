@@ -1,6 +1,7 @@
 """SQLite deletion policy and filesystem permissions for credential storage."""
 
 from pathlib import Path
+
 from sqlalchemy import event
 
 
