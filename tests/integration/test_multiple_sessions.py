@@ -13,7 +13,10 @@ def headers(token):
 
 
 def test_two_browsers_can_login_refresh_and_logout_independently(client):
-    with TestClient(client.app) as other_browser, respx.mock() as monzo_mock:
+    with TestClient(
+        client.app,
+        headers={"X-BFF-API-Key": client.app.state.resources.settings.bff_api_key},
+    ) as other_browser, respx.mock() as monzo_mock:
         monzo_mock.post("https://api.monzo.com/oauth2/token").mock(
             return_value=httpx.Response(
                 200,

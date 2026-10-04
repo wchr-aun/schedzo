@@ -14,6 +14,7 @@ def settings():
         monzo_client_id="test-client-id",
         monzo_client_secret="test-client-secret",
         monzo_redirect_uri="http://testserver/monzo-callback",
+        bff_api_key="test-bff-api-key-that-is-long-enough-for-tests",
         jwt_secret_key="test-jwt-signing-secret-for-tests-only",
         token_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     )
@@ -28,7 +29,9 @@ def client(settings):
     )
     Base.metadata.create_all(engine)
     application = create_app(settings, engine=engine)
-    with TestClient(application) as test_client:
+    with TestClient(
+        application, headers={"X-BFF-API-Key": settings.bff_api_key}
+    ) as test_client:
         yield test_client
     engine.dispose()
 

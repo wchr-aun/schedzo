@@ -65,6 +65,7 @@ jobs:
               environment.write(f"DATABASE_URL=sqlite:///{os.environ['RUNNER_TEMP']}/ci.db\n")
               environment.write(f"JWT_SECRET_KEY={secrets.token_urlsafe(32)}\n")
               environment.write(f"TOKEN_ENCRYPTION_KEY={Fernet.generate_key().decode()}\n")
+              environment.write(f"BFF_API_KEY={secrets.token_urlsafe(32)}\n")
           PY
       - name: Apply migrations to a fresh database
         run: uv run --no-sync alembic upgrade head

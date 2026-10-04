@@ -20,6 +20,7 @@ class Settings:
     database_url: str = "sqlite:///./monzo_scheduler.db"
     jwt_secret_key: str = field(default="", repr=False)
     token_encryption_key: str = field(default="", repr=False)
+    bff_api_key: str = field(default="", repr=False)
     jwt_expiration_seconds: int = 900
     environment: str = "development"
 
@@ -36,6 +37,7 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", "sqlite:///./monzo_scheduler.db"),
             jwt_secret_key=os.getenv("JWT_SECRET_KEY", ""),
             token_encryption_key=os.getenv("TOKEN_ENCRYPTION_KEY", ""),
+            bff_api_key=os.getenv("BFF_API_KEY", ""),
             jwt_expiration_seconds=int(os.getenv("JWT_EXPIRATION_SECONDS", "900")),
         )
 
@@ -50,6 +52,8 @@ def validate_settings(settings: Settings) -> None:
         raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
     if len(settings.jwt_secret_key.encode()) < 32:
         raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes")
+    if len(settings.bff_api_key.encode()) < 32:
+        raise RuntimeError("BFF_API_KEY must contain at least 32 bytes")
     if not 1 <= settings.jwt_expiration_seconds <= 3600:
         raise RuntimeError("JWT_EXPIRATION_SECONDS must be between 1 and 3600")
     if settings.environment not in {"development", "production"}:
@@ -66,11 +70,11 @@ def validate_settings(settings: Settings) -> None:
                 {
                     settings.jwt_secret_key,
                     settings.token_encryption_key,
+                    settings.bff_api_key,
                 }
-            )
-            != 2
+            ) != 3
         ):
-            raise RuntimeError("Signing and encryption keys must be distinct")
+            raise RuntimeError("Signing, encryption, and BFF keys must be distinct")
         if base64.urlsafe_b64decode(settings.token_encryption_key) in {
             b"0" * 32,
             b"\0" * 32,

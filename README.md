@@ -62,6 +62,7 @@ environment variables take precedence.
 | `DATABASE_URL` | Defaults to `sqlite:///./monzo_scheduler.db` |
 | `JWT_SECRET_KEY` | Signing secret of at least 32 bytes; required at startup |
 | `TOKEN_ENCRYPTION_KEY` | Valid Fernet key; required at startup and for token migrations |
+| `BFF_API_KEY` | Random secret of at least 32 bytes shared only by the API and Next.js BFF; required at startup |
 | `JWT_EXPIRATION_SECONDS` | Access-token lifetime, 1–3600 seconds; defaults to 900 |
 | `APP_ENV` | `development` (default) or `production` |
 
@@ -69,6 +70,13 @@ The app does not create its schema at startup. Always run Alembic with the same
 database URL and encryption key as the application. Losing the encryption key
 makes stored Monzo credentials unreadable; replacing it requires re-encrypting
 those credentials.
+
+The Next.js BFF must send `X-BFF-API-Key` on requests to this API. Configure the
+same randomly generated value as `BFF_API_KEY` on both servers and keep it out of
+browser code. `/health`, API documentation, and `/monzo-callback` are exempt so
+health checks, documentation, and Monzo's direct OAuth redirect continue to
+work. This authenticates the BFF to the API; normal user authentication still
+uses application bearer tokens.
 
 ## Authentication and sessions
 
