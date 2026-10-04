@@ -1,5 +1,6 @@
 import httpx
 import respx
+
 from app.db.models import MonzoCredential
 from app.services.disconnection import retry_monzo_disconnection
 from tests.integration.test_security_races import login
@@ -15,7 +16,7 @@ def test_emergency_stop_revokes_monzo_and_erases_stored_credentials(
     )
     assert response.status_code == 204
     assert route.calls.last.request.headers["Authorization"] == "Bearer synthetic-token"
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
         assert row.disconnected and row.scheduling_paused and not row.revocation_pending
         assert row.access_token == "" and row.refresh_token is None
@@ -30,14 +31,14 @@ def test_provider_outage_keeps_connection_blocked_and_retries(
         "/disconnect", headers={"Authorization": f"Bearer {pair.access_token}"}
     )
     assert response.status_code == 202
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
         assert row.disconnected and row.revocation_pending and row.scheduling_paused
     mock_monzo_disconnection.mock(return_value=httpx.Response(200))
     assert retry_monzo_disconnection(
-        "audit-user", client.app.state.session_factory, settings
+        "audit-user", client.app.state.resources.session_factory, settings
     )
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert not session.get(MonzoCredential, "audit-user").revocation_pending
 
 
@@ -45,10 +46,11 @@ def test_expired_connection_is_renewed_then_revoked(
     client, settings, mock_monzo_disconnection
 ):
     from datetime import datetime, timedelta, timezone
-    from app.services.token_store import encrypt_token
+
+    from app.services.token_crypto import encrypt_token
 
     pair = login(client, settings)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         credential = session.get(MonzoCredential, "audit-user")
         credential.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         credential.refresh_token = encrypt_token("synthetic-refresh", settings)
@@ -81,10 +83,11 @@ def test_revoked_grant_can_finish_disconnection_without_permanent_retry(
     client, settings, mock_monzo_disconnection
 ):
     from datetime import datetime, timedelta, timezone
-    from app.services.token_store import encrypt_token
+
+    from app.services.token_crypto import encrypt_token
 
     pair = login(client, settings)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         credential = session.get(MonzoCredential, "audit-user")
         credential.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         credential.refresh_token = encrypt_token("synthetic-invalid-refresh", settings)
@@ -100,7 +103,7 @@ def test_revoked_grant_can_finish_disconnection_without_permanent_retry(
             ).status_code
             == 204
         )
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert not session.get(MonzoCredential, "audit-user").revocation_pending
 
 
@@ -108,24 +111,26 @@ def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
     client, settings, monkeypatch, mock_monzo_disconnection
 ):
     import asyncio
-    import pytest
     from datetime import datetime, timedelta, timezone
+
+    import pytest
+
     from app.schemas.monzo import MonzoTokenResponse
-    from app.services.authorization import (
-        resolve_monzo_access_token,
+    from app.services.monzo_credentials import (
         MonzoConnectionError,
+        resolve_monzo_access_token,
     )
-    from app.services.token_store import encrypt_token
+    from app.services.token_crypto import encrypt_token
 
     login(client, settings)
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         credential = session.get(MonzoCredential, "audit-user")
         credential.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         credential.refresh_token = encrypt_token("old-provider-refresh", settings)
         session.commit()
 
     async def provider_refresh(*args):
-        with client.app.state.session_factory() as session:
+        with client.app.state.resources.session_factory() as session:
             credential = session.get(MonzoCredential, "audit-user")
             credential.disconnected = True
             credential.revocation_pending = True
@@ -138,16 +143,16 @@ def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
         )
 
     monkeypatch.setattr(
-        "app.services.authorization.refresh_access_token", provider_refresh
+        "app.services.monzo.MonzoClient.refresh_access_token", provider_refresh
     )
     with pytest.raises(MonzoConnectionError):
         asyncio.run(
             resolve_monzo_access_token(
-                "audit-user", client.app.state.session_factory, settings
+                "audit-user", client.app.state.resources.session_factory, settings
             )
         )
     assert retry_monzo_disconnection(
-        "audit-user", client.app.state.session_factory, settings
+        "audit-user", client.app.state.resources.session_factory, settings
     )
     assert (
         mock_monzo_disconnection.calls.last.request.headers["Authorization"]

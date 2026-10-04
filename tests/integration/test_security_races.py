@@ -2,12 +2,12 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 from app.db.models import ScheduledTransferSetup
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.token_store import save_monzo_tokens
-from app.services.scheduler import schedule_transfer
+from app.services.schedules import schedule_transfer
+from app.services.sessions import issue_app_session
 
 BODY = {
     "datetime": "2030-01-01T10:00:00Z",
@@ -20,14 +20,13 @@ BODY = {
 
 
 def login(client, settings):
-    with client.app.state.session_factory() as session:
-        return save_monzo_tokens(
-            MonzoTokenResponse(
-                user_id="audit-user", access_token="synthetic-token", expires_in=3600
-            ),
-            session,
-            settings,
-        )
+    return issue_app_session(
+        MonzoTokenResponse(
+            user_id="audit-user", access_token="synthetic-token", expires_in=3600
+        ),
+        client.app.state.resources.session_factory,
+        settings,
+    )
 
 
 @pytest.mark.parametrize("operation", ["/emergency-stop", "/logout"])
@@ -54,7 +53,7 @@ def test_authenticated_creation_cannot_survive_revocation(
         finally:
             release.set()
         assert future.result(timeout=5).status_code == 401
-    with client.app.state.session_factory() as session:
+    with client.app.state.resources.session_factory() as session:
         assert (
             session.scalar(select(func.count()).select_from(ScheduledTransferSetup))
             == 0

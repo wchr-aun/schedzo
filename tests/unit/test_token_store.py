@@ -1,11 +1,11 @@
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Base, MonzoCredential
 from app.schemas.monzo import MonzoTokenResponse
-from app.services.token_store import save_monzo_tokens
-from app.services.token_store import decrypt_token
+from app.services.sessions import issue_app_session
+from app.services.token_crypto import decrypt_token
 
 
 @pytest.mark.parametrize(
@@ -43,11 +43,11 @@ def test_save_tokens_requires_jwt_secret(settings):
 
     with Session(engine) as session:
         with pytest.raises(ValueError, match="JWT_SECRET_KEY"):
-            save_monzo_tokens(
+            issue_app_session(
                 MonzoTokenResponse(
                     user_id="user-1", access_token="secret", expires_in=60
                 ),
-                session,
+                sessionmaker(bind=engine, expire_on_commit=False),
                 settings,
             )
         assert session.get(MonzoCredential, "user-1") is None
@@ -58,11 +58,9 @@ def test_save_tokens_supports_optional_refresh_token(settings):
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with Session(engine) as session:
-        signed_token = save_monzo_tokens(
-            MonzoTokenResponse(
-                user_id="user-1", access_token="access", expires_in=60
-            ),
-            session,
+        signed_token = issue_app_session(
+            MonzoTokenResponse(user_id="user-1", access_token="access", expires_in=60),
+            sessionmaker(bind=engine, expire_on_commit=False),
             settings,
         )
         saved = session.get(MonzoCredential, "user-1")

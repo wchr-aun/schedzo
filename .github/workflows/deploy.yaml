@@ -58,9 +58,8 @@ jobs:
           sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler merge --ff-only "$expected_commit"
           test "$(sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler rev-parse HEAD)" = "$expected_commit"
           sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler sync --frozen --no-dev
-          sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync python -c 'from dotenv import load_dotenv; import os; load_dotenv(); assert os.getenv("APP_ENV") == "production", "APP_ENV=production is required for deployment"'
           sudo -n systemctl stop monzo-scheduler
-          sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync alembic upgrade head
+          sudo -n systemctl start monzo-scheduler-migrate
           sudo -n systemctl restart monzo-scheduler
           sudo -n systemctl is-active --quiet monzo-scheduler
           DEPLOY

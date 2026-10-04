@@ -1,11 +1,13 @@
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-import sqlite3
+
 from alembic import command
 from alembic.config import Config
-from app.db.models import MonzoCredential, AppSession, UsedAppRefreshToken
-from app.db.session import create_session_factory, create_database_engine
-from app.services.token_store import decrypt_token
+
+from app.db.models import AppSession, MonzoCredential, UsedAppRefreshToken
+from app.db.session import create_database_engine, create_session_factory
+from app.services.token_crypto import decrypt_token
 
 
 def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
@@ -90,7 +92,7 @@ def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
         assert not hasattr(app_session, "absolute_expires_at")
         assert app_session.expires_at == now + timedelta(days=60)
         assert session.get(UsedAppRefreshToken, old_hash).session_id == "legacy-session"
-    from app.services.token_store import rotate_app_refresh_token
+    from app.services.sessions import rotate_app_refresh_token
 
     factory = create_session_factory(engine)
     with factory() as session:
@@ -116,23 +118,23 @@ def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
 
 def test_first_login_and_schedule_work_with_hardened_foreign_keys(tmp_path, settings):
     from fastapi.testclient import TestClient
-    from app.main import create_app
+
     from app.db.models import Base
+    from app.main import create_app
     from app.schemas.monzo import MonzoTokenResponse
-    from app.services.token_store import save_monzo_tokens
+    from app.services.sessions import issue_app_session
     from tests.integration.test_security_races import BODY
 
     engine = create_database_engine(f"sqlite:///{tmp_path / 'hardened.db'}")
     Base.metadata.create_all(engine)
     with TestClient(create_app(settings, engine=engine)) as client:
-        with client.app.state.session_factory() as session:
-            pair = save_monzo_tokens(
-                MonzoTokenResponse(
-                    user_id="new-user", access_token="synthetic-token", expires_in=3600
-                ),
-                session,
-                settings,
-            )
+        pair = issue_app_session(
+            MonzoTokenResponse(
+                user_id="new-user", access_token="synthetic-token", expires_in=3600
+            ),
+            client.app.state.resources.session_factory,
+            settings,
+        )
         headers = {"Authorization": f"Bearer {pair.access_token}"}
         assert (
             client.post("/schedule-transfer", headers=headers, json=BODY).status_code

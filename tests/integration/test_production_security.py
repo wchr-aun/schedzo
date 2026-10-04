@@ -1,8 +1,10 @@
-from dataclasses import replace
 import secrets
+from dataclasses import replace
+
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+
 from app.main import create_app
 
 
@@ -18,7 +20,7 @@ def production(settings):
 
 def test_production_rejects_http_and_serves_api_docs(client, settings):
     application = create_app(
-        production(settings), engine=client.app.state.database_engine
+        production(settings), engine=client.app.state.resources.database_engine
     )
     with TestClient(application) as secure_client:
         assert secure_client.get("/health").status_code == 400
@@ -56,7 +58,7 @@ def test_production_fails_closed_for_insecure_configuration(
         with TestClient(
             create_app(
                 replace(production(settings), **changes),
-                engine=client.app.state.database_engine,
+                engine=client.app.state.resources.database_engine,
             )
         ):
             pass
@@ -64,7 +66,7 @@ def test_production_fails_closed_for_insecure_configuration(
 
 def test_production_oauth_and_refresh_do_not_require_bff_headers(client, settings):
     application = create_app(
-        production(settings), engine=client.app.state.database_engine
+        production(settings), engine=client.app.state.resources.database_engine
     )
     with TestClient(application, base_url="https://testserver") as secure_client:
         redirect = secure_client.get("/monzo-redirect", follow_redirects=False)
