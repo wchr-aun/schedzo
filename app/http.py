@@ -1,6 +1,7 @@
 """HTTP error sanitization, request diagnostics, and security middleware."""
 
 from collections.abc import Awaitable, Callable
+from hmac import compare_digest
 from time import monotonic
 from uuid import uuid6
 
@@ -51,6 +52,22 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
         request_id = uuid6().hex
         request.state.request_id = request_id
         started_at = monotonic()
+        if request.url.path not in {
+            "/health",
+            "/monzo-callback",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+        }:
+            supplied_key = request.headers.get("X-BFF-API-Key", "")
+            expected_key = request.app.state.resources.settings.bff_api_key
+            if not supplied_key or not compare_digest(supplied_key, expected_key):
+                response = JSONResponse(
+                    status_code=401, content={"detail": "Invalid or missing BFF key"}
+                )
+                response.headers["X-Request-ID"] = request_id
+                add_security_headers(response, request)
+                return response
         client_host = request.client.host if request.client is not None else "unknown"
         if not request.app.state.resources.request_rate_limiter.allow(client_host):
             response = JSONResponse(
