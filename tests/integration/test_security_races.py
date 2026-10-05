@@ -60,22 +60,26 @@ def test_authenticated_creation_cannot_survive_revocation(
         )
 
 
-def test_emergency_pause_survives_reauthentication_until_explicit_resume(
+def test_reconnection_allows_new_schedules_but_does_not_reactivate_old_setups(
     client, settings
 ):
     pair = login(client, settings)
+    headers = {"Authorization": f"Bearer {pair.access_token}"}
+    existing = client.post("/schedule-transfer", headers=headers, json=BODY).json()
     assert (
         client.post(
-            "/disconnect", headers={"Authorization": f"Bearer {pair.access_token}"}
+            "/disconnect", headers=headers
         ).status_code
         == 204
     )
     fresh = login(client, settings)
-    headers = {"Authorization": f"Bearer {fresh.access_token}"}
+    fresh_headers = {"Authorization": f"Bearer {fresh.access_token}"}
     assert (
-        client.post("/schedule-transfer", headers=headers, json=BODY).status_code == 409
+        client.post(
+            "/schedule-transfer", headers=fresh_headers, json=BODY
+        ).status_code
+        == 200
     )
-    assert client.post("/resume-transfers", headers=headers).status_code == 204
-    assert (
-        client.post("/schedule-transfer", headers=headers, json=BODY).status_code == 200
-    )
+    with client.app.state.resources.session_factory() as session:
+        setup = session.get(ScheduledTransferSetup, existing["setup_id"])
+        assert setup.status == "deactivated"

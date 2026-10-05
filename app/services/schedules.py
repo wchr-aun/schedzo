@@ -20,7 +20,6 @@ from app.domain.transfers import (
     ScheduleNotFoundError,
     ScheduleQuotaExceededError,
     ScheduleTransferCommand,
-    SchedulingPausedError,
     TransferInterval,
     TransferStatus,
     TransferType,
@@ -203,10 +202,6 @@ def schedule_transfer(
             and decode_user_id(session_token, settings, session_factory) != user_id
         ):
             raise SessionAuthenticationError
-        with session_factory() as session:
-            credential = session.get(MonzoCredential, user_id)
-            if credential is not None and credential.scheduling_paused:
-                raise SchedulingPausedError
         return _schedule_transfer_unlocked(
             scheduler, session_factory, settings, user_id, command, now=now
         )
@@ -258,37 +253,29 @@ def _cancel_scheduled_transfer_locked(
     return None
 
 
-def emergency_stop_user_transfers(
+def disconnect_user_schedules(
     scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
     *,
-    session_token: str | None = None,
-    settings: Settings | None = None,
-    disconnect: bool = False,
+    session_token: str,
+    settings: Settings,
 ) -> int:
-    """Deactivate a user's schedules and cancel all occurrences that have not started."""
+    """Revoke sessions and deactivate schedules while preparing to disconnect."""
     lock = user_execution_lock(user_id)
     lock.acquire()
     try:
-        if (
-            session_token is not None
-            and decode_user_id(session_token, settings, session_factory) != user_id
-        ):
+        if decode_user_id(session_token, settings, session_factory) != user_id:
             raise SessionAuthenticationError
-        return _emergency_stop_user_transfers_locked(
-            scheduler, session_factory, user_id, disconnect=disconnect
-        )
+        return _disconnect_user_schedules_locked(scheduler, session_factory, user_id)
     finally:
         lock.release()
 
 
-def _emergency_stop_user_transfers_locked(
+def _disconnect_user_schedules_locked(
     scheduler: TransferJobs,
     session_factory: SessionFactory,
     user_id: str,
-    *,
-    disconnect: bool = False,
 ) -> int:
     with session_factory() as session:
         setups = session.scalars(
@@ -314,35 +301,9 @@ def _emergency_stop_user_transfers_locked(
         credential = session.get(MonzoCredential, user_id)
         if credential is not None:
             credential.session_version = (credential.session_version or 0) + 1
-            credential.scheduling_paused = True
-            if disconnect:
-                credential.connection_status = ConnectionStatus.REVOCATION_PENDING
+            credential.connection_status = ConnectionStatus.REVOCATION_PENDING
         session.commit()
 
     for transfer_id in transfer_ids:
         scheduler.remove(transfer_id)
     return len(transfer_ids)
-
-
-def resume_user_scheduling(
-    user_id: str,
-    session_token: str,
-    session_factory: SessionFactory,
-    settings: Settings,
-) -> None:
-    with user_execution_lock(user_id):
-        if decode_user_id(session_token, settings, session_factory) != user_id:
-            raise SessionAuthenticationError
-        with session_factory() as session:
-            credential = session.get(MonzoCredential, user_id)
-            if credential is None:
-                raise SessionAuthenticationError
-            credential.scheduling_paused = False
-            session.commit()
-
-
-def user_scheduling_paused(user_id: str, session_factory: SessionFactory) -> bool:
-    """Return whether scheduling is paused for a user."""
-    with session_factory() as session:
-        credential = session.get(MonzoCredential, user_id)
-        return bool(credential is not None and credential.scheduling_paused)

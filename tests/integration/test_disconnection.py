@@ -7,7 +7,7 @@ from app.services.disconnection import retry_monzo_disconnection
 from tests.integration.test_security_races import login
 
 
-def test_emergency_stop_revokes_monzo_and_erases_stored_credentials(
+def test_disconnect_revokes_monzo_and_erases_stored_credentials(
     client, settings, mock_monzo_disconnection
 ):
     pair = login(client, settings)
@@ -19,10 +19,7 @@ def test_emergency_stop_revokes_monzo_and_erases_stored_credentials(
     assert route.calls.last.request.headers["Authorization"] == "Bearer synthetic-token"
     with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
-        assert (
-            row.connection_status == ConnectionStatus.DISCONNECTED
-            and row.scheduling_paused
-        )
+        assert row.connection_status == ConnectionStatus.DISCONNECTED
         assert row.access_token == "" and row.refresh_token is None
 
 
@@ -37,10 +34,7 @@ def test_provider_outage_keeps_connection_blocked_and_retries(
     assert response.status_code == 202
     with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
-        assert (
-            row.connection_status == ConnectionStatus.REVOCATION_PENDING
-            and row.scheduling_paused
-        )
+        assert row.connection_status == ConnectionStatus.REVOCATION_PENDING
     mock_monzo_disconnection.mock(return_value=httpx.Response(200))
     assert retry_monzo_disconnection(
         "audit-user", client.app.state.resources.session_factory, settings

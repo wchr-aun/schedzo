@@ -54,7 +54,3 @@ class ScheduledTransfersPageResponse(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-class SchedulingPausedResponse(BaseModel):
-    paused: bool

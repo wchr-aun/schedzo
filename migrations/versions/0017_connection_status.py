@@ -1,4 +1,4 @@
-"""Replace Monzo disconnection flags with one connection status."""
+"""Replace Monzo disconnection flags and remove the scheduling pause."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -32,6 +32,7 @@ def upgrade():
     with op.batch_alter_table("monzo_credentials") as batch:
         batch.drop_column("revocation_pending")
         batch.drop_column("disconnected")
+        batch.drop_column("scheduling_paused")
         batch.create_check_constraint(
             "ck_monzo_credentials_connection_status",
             "connection_status IN ('connected', 'revocation_pending', 'disconnected')",
@@ -39,6 +40,12 @@ def upgrade():
 
 
 def downgrade():
+    op.add_column(
+        "monzo_credentials",
+        sa.Column(
+            "scheduling_paused", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
+    )
     op.add_column(
         "monzo_credentials",
         sa.Column(
@@ -58,7 +65,8 @@ def downgrade():
     connection.execute(
         sa.text(
             "UPDATE monzo_credentials "
-            "SET disconnected = connection_status IN ('disconnected', 'revocation_pending'), "
+            "SET scheduling_paused = connection_status IN ('disconnected', 'revocation_pending'), "
+            "disconnected = connection_status IN ('disconnected', 'revocation_pending'), "
             "revocation_pending = connection_status = 'revocation_pending'"
         )
     )

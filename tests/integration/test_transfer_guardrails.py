@@ -29,7 +29,7 @@ def test_large_transfers_are_accepted_but_storage_overflow_is_rejected(
         )
 
 
-def test_old_login_can_create_and_resume_with_valid_session(client, settings):
+def test_old_login_can_create_with_valid_session(client, settings):
     pair = login(client, settings)
     with client.app.state.resources.session_factory() as session:
         row = session.query(AppSession).one()
@@ -42,7 +42,6 @@ def test_old_login_can_create_and_resume_with_valid_session(client, settings):
     assert (
         client.post("/schedule-transfer", headers=headers, json=BODY).status_code == 200
     )
-    assert client.post("/resume-transfers", headers=headers).status_code == 204
 
 
 def test_execution_has_no_application_monetary_budget(client, settings, monkeypatch):

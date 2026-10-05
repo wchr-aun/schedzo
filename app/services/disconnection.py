@@ -16,7 +16,7 @@ from app.domain.time import as_utc
 from app.observability import get_logger
 from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.monzo_credentials import monzo_refresh_lock
-from app.services.schedules import emergency_stop_user_transfers
+from app.services.schedules import disconnect_user_schedules
 from app.services.token_crypto import decrypt_token, encrypt_token
 from app.services.user_locks import user_execution_lock
 
@@ -134,12 +134,11 @@ def disconnect_user(
     authentication: AuthenticationContext,
 ) -> bool:
     """Persist scheduling/session revocation before attempting provider disconnection."""
-    emergency_stop_user_transfers(
+    disconnect_user_schedules(
         scheduler,
         session_factory,
         authentication.user_id,
         session_token=authentication.session_token,
         settings=settings,
-        disconnect=True,
     )
     return retry_monzo_disconnection(authentication.user_id, session_factory, settings)

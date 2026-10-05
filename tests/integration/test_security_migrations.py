@@ -79,6 +79,11 @@ def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
         )
     command.upgrade(config, "head")
     assert marker.encode() not in path.read_bytes()
+    with sqlite3.connect(path) as db:
+        credential_columns = {
+            column[1] for column in db.execute("PRAGMA table_info(monzo_credentials)")
+        }
+    assert "scheduling_paused" not in credential_columns
     engine = create_database_engine(f"sqlite:///{path}")
     with engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA secure_delete").scalar() == 1
@@ -86,7 +91,6 @@ def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
     with create_session_factory(engine)() as session:
         credential = session.get(MonzoCredential, "legacy-user")
         assert decrypt_token(credential.access_token, settings) == marker
-        assert not credential.scheduling_paused
         assert credential.connection_status == ConnectionStatus.CONNECTED
         app_session = session.get(AppSession, "legacy-session")
         assert app_session.refresh_token_hash == current_hash

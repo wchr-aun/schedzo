@@ -45,9 +45,6 @@ class MonzoCredential(Base):
         server_default=ConnectionStatus.CONNECTED,
         nullable=False,
     )
-    scheduling_paused: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

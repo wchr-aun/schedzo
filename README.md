@@ -111,7 +111,7 @@ A refresh quota 429 is temporary; retain the current token and respect
 Multiple devices or browsers can keep separate sessions. Login preserves
 existing sessions. Logout and refresh-token reuse invalidate the affected
 session; legacy JWTs without a session ID invalidate all sessions on logout.
-Emergency stop and disconnect invalidate all sessions for the user.
+Disconnect invalidates all sessions for the user.
 
 ## Protected endpoints
 
@@ -124,22 +124,20 @@ Emergency stop and disconnect invalidate all sessions for the user.
 | `POST /schedule-transfer` | Create a recurring schedule |
 | `DELETE /schedule-transfer/<setup_id>` | Deactivate the setup and cancel its pending occurrence; returns 204 |
 | `POST /logout` | Revoke the current app session; preserves schedules and the Monzo connection; returns 204 |
-| `POST /disconnect` | Pause scheduling, cancel pending transfers, revoke all app sessions, and disconnect Monzo |
-| `GET /scheduling-paused` | Return `{"paused": boolean}` for the authenticated user |
-| `POST /resume-transfers` | Clear the scheduling pause; does not reactivate cancelled setups; returns 204 |
+| `POST /disconnect` | Deactivate schedules, cancel pending transfers, revoke all app sessions, and disconnect Monzo |
 
 Transfer history returns `items`, `total`, `limit`, and `offset`. The default
 limit is 50 (maximum 100); offset defaults to 0. Filter by `account_id`, `pot_id`,
 or comma-separated `status` values: `pending`, `running`, `completed`, `failed`,
 and `cancelled`. The default status filter excludes cancelled transfers.
 
-Emergency stop waits for an in-flight transfer before cancelling pending work.
-Stop/disconnect return 204 after confirmed provider revocation, or 202 when
-revocation remains pending. A 202 still means scheduling is paused, all app
-sessions are revoked, and the stored connection is blocked. Revocation retries
-every minute, including after restart. Login is blocked until revocation finishes.
-Stored Monzo tokens are erased after confirmation. Reconnect through OAuth, then
-explicitly resume scheduling before creating new schedules.
+Disconnect lets any in-flight transfer finish before cancelling pending work.
+It returns 204 after confirmed provider revocation, or 202 when revocation
+remains pending. A 202 still means schedules are deactivated, pending transfers
+are cancelled, all app sessions are revoked, and the stored connection is blocked.
+Revocation retries every minute, including after restart. Login is blocked until
+revocation finishes. Stored Monzo tokens are erased after confirmation. Reconnect
+through OAuth to create new schedules; disconnected setups stay deactivated.
 
 ## Scheduling
 

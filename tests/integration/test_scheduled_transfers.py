@@ -100,7 +100,7 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(client, se
         assert transfer.executed_at is None
 
 
-def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(
+def test_disconnect_cancels_pending_transfers_and_revokes_sessions(
     client, settings
 ):
     _save_credential(client)
