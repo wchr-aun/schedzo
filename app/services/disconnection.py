@@ -10,6 +10,7 @@ from app.config import Settings
 from app.db.models import MonzoCredential
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext
+from app.domain.connection import ConnectionStatus
 from app.domain.scheduling import TransferJobs
 from app.domain.time import as_utc
 from app.observability import get_logger
@@ -51,7 +52,10 @@ async def _revoke_with_client(
 ) -> None:
     with session_factory() as session:
         credential = session.get(MonzoCredential, user_id)
-        if credential is None or not credential.revocation_pending:
+        if (
+            credential is None
+            or credential.connection_status != ConnectionStatus.REVOCATION_PENDING
+        ):
             return
         access = decrypt_token(credential.access_token, settings)
         refresh = decrypt_token(credential.refresh_token, settings)
@@ -105,7 +109,7 @@ async def _revoke_with_client(
         credential.access_token = ""
         credential.refresh_token = None
         credential.expires_at = datetime.now(timezone.utc)
-        credential.revocation_pending = False
+        credential.connection_status = ConnectionStatus.DISCONNECTED
         session.commit()
 
 
@@ -115,7 +119,8 @@ def retry_pending_disconnections(
     with session_factory() as session:
         users = session.scalars(
             select(MonzoCredential.user_id).where(
-                MonzoCredential.revocation_pending.is_(True)
+                MonzoCredential.connection_status
+                == ConnectionStatus.REVOCATION_PENDING
             )
         ).all()
     for user_id in users:

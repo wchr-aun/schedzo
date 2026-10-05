@@ -122,7 +122,7 @@ def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(
         },
     ).json()
 
-    stopped = client.post("/emergency-stop", headers=headers)
+    stopped = client.post("/disconnect", headers=headers)
     old_session = client.get("/scheduled-transfers", headers=headers)
 
     assert stopped.status_code == 204

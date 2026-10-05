@@ -35,6 +35,7 @@ from app.schemas.tasks import (
     ScheduledTransferResponse,
     ScheduledTransfersPageResponse,
     ScheduleTransferRequest,
+    SchedulingPausedResponse,
 )
 from app.services.disconnection import disconnect_user
 from app.services.schedules import (
@@ -42,6 +43,7 @@ from app.services.schedules import (
     list_scheduled_transfers,
     resume_user_scheduling,
     schedule_transfer,
+    user_scheduling_paused,
 )
 from app.services.sessions import logout_session
 
@@ -77,15 +79,14 @@ def logout(
 
 
 @router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
-@router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
-def emergency_stop(
+def disconnect(
     authentication: AuthenticationContext = Depends(authenticated_session),
     settings: Settings = Depends(get_settings),
     session_factory: SessionFactory = Depends(get_session_factory),
     scheduler: TransferJobs = Depends(get_transfer_jobs),
 ) -> Response:
     try:
-        disconnected = disconnect_user(
+        revoked = disconnect_user(
             scheduler,
             session_factory,
             settings,
@@ -97,12 +98,27 @@ def emergency_stop(
         raise HTTPException(
             status_code=503, detail="Scheduled transfer storage is unavailable"
         ) from exc
-    if not disconnected:
+    if not revoked:
         return JSONResponse(
             {"detail": "Schedules stopped; Monzo disconnection pending"},
             status_code=202,
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/scheduling-paused", response_model=SchedulingPausedResponse)
+def get_scheduling_paused(
+    authentication: AuthenticationContext = Depends(authenticated_session),
+    session_factory: SessionFactory = Depends(get_session_factory),
+) -> SchedulingPausedResponse:
+    try:
+        paused = user_scheduling_paused(authentication.user_id, session_factory)
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Scheduled transfer storage is unavailable",
+        ) from None
+    return SchedulingPausedResponse(paused=paused)
 
 
 def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:

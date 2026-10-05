@@ -2,6 +2,7 @@ import httpx
 import respx
 
 from app.db.models import MonzoCredential
+from app.domain.connection import ConnectionStatus
 from app.services.disconnection import retry_monzo_disconnection
 from tests.integration.test_security_races import login
 
@@ -12,13 +13,16 @@ def test_emergency_stop_revokes_monzo_and_erases_stored_credentials(
     pair = login(client, settings)
     route = mock_monzo_disconnection
     response = client.post(
-        "/emergency-stop", headers={"Authorization": f"Bearer {pair.access_token}"}
+        "/disconnect", headers={"Authorization": f"Bearer {pair.access_token}"}
     )
     assert response.status_code == 204
     assert route.calls.last.request.headers["Authorization"] == "Bearer synthetic-token"
     with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
-        assert row.disconnected and row.scheduling_paused and not row.revocation_pending
+        assert (
+            row.connection_status == ConnectionStatus.DISCONNECTED
+            and row.scheduling_paused
+        )
         assert row.access_token == "" and row.refresh_token is None
 
 
@@ -33,13 +37,19 @@ def test_provider_outage_keeps_connection_blocked_and_retries(
     assert response.status_code == 202
     with client.app.state.resources.session_factory() as session:
         row = session.get(MonzoCredential, "audit-user")
-        assert row.disconnected and row.revocation_pending and row.scheduling_paused
+        assert (
+            row.connection_status == ConnectionStatus.REVOCATION_PENDING
+            and row.scheduling_paused
+        )
     mock_monzo_disconnection.mock(return_value=httpx.Response(200))
     assert retry_monzo_disconnection(
         "audit-user", client.app.state.resources.session_factory, settings
     )
     with client.app.state.resources.session_factory() as session:
-        assert not session.get(MonzoCredential, "audit-user").revocation_pending
+        assert (
+            session.get(MonzoCredential, "audit-user").connection_status
+            == ConnectionStatus.DISCONNECTED
+        )
 
 
 def test_expired_connection_is_renewed_then_revoked(
@@ -104,7 +114,10 @@ def test_revoked_grant_can_finish_disconnection_without_permanent_retry(
             == 204
         )
     with client.app.state.resources.session_factory() as session:
-        assert not session.get(MonzoCredential, "audit-user").revocation_pending
+        assert (
+            session.get(MonzoCredential, "audit-user").connection_status
+            == ConnectionStatus.DISCONNECTED
+        )
 
 
 def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
@@ -132,8 +145,7 @@ def test_inflight_monzo_refresh_preserves_new_tokens_for_revocation(
     async def provider_refresh(*args):
         with client.app.state.resources.session_factory() as session:
             credential = session.get(MonzoCredential, "audit-user")
-            credential.disconnected = True
-            credential.revocation_pending = True
+            credential.connection_status = ConnectionStatus.REVOCATION_PENDING
             session.commit()
         return MonzoTokenResponse(
             user_id="audit-user",

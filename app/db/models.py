@@ -14,6 +14,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.domain.connection import ConnectionStatus
+
 
 class Base(DeclarativeBase):
     pass
@@ -21,6 +23,12 @@ class Base(DeclarativeBase):
 
 class MonzoCredential(Base):
     __tablename__ = "monzo_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "connection_status IN ('connected', 'revocation_pending', 'disconnected')",
+            name="ck_monzo_credentials_connection_status",
+        ),
+    )
 
     user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     access_token: Mapped[str] = mapped_column(
@@ -31,9 +39,11 @@ class MonzoCredential(Base):
     )
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
     session_version: Mapped[int] = mapped_column(default=0, nullable=False)
-    disconnected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    revocation_pending: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
+    connection_status: Mapped[str] = mapped_column(
+        String(32),
+        default=ConnectionStatus.CONNECTED,
+        server_default=ConnectionStatus.CONNECTED,
+        nullable=False,
     )
     scheduling_paused: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False

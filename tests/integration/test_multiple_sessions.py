@@ -65,7 +65,7 @@ def test_two_browsers_can_login_refresh_and_logout_independently(client):
         ).status_code == 200
 
 
-@pytest.mark.parametrize("operation", ["/emergency-stop", "/disconnect"])
+@pytest.mark.parametrize("operation", ["/disconnect"])
 def test_global_revocation_invalidates_all_sessions_even_after_new_login(
     client, settings, operation
 ):

@@ -29,7 +29,7 @@ def login(client, settings):
     )
 
 
-@pytest.mark.parametrize("operation", ["/emergency-stop", "/logout"])
+@pytest.mark.parametrize("operation", ["/disconnect", "/logout"])
 def test_authenticated_creation_cannot_survive_revocation(
     client, settings, monkeypatch, operation
 ):
@@ -66,7 +66,7 @@ def test_emergency_pause_survives_reauthentication_until_explicit_resume(
     pair = login(client, settings)
     assert (
         client.post(
-            "/emergency-stop", headers={"Authorization": f"Bearer {pair.access_token}"}
+            "/disconnect", headers={"Authorization": f"Bearer {pair.access_token}"}
         ).status_code
         == 204
     )

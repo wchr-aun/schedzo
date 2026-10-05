@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.config import Settings
 from app.db.models import MonzoCredential, ScheduledTransfer, ScheduledTransferSetup
 from app.db.session import SessionFactory
+from app.domain.connection import ConnectionStatus
 from app.domain.errors import SessionAuthenticationError
 from app.domain.scheduling import TransferJobs
 from app.domain.time import UK_TIMEZONE
@@ -315,8 +316,7 @@ def _emergency_stop_user_transfers_locked(
             credential.session_version = (credential.session_version or 0) + 1
             credential.scheduling_paused = True
             if disconnect:
-                credential.disconnected = True
-                credential.revocation_pending = True
+                credential.connection_status = ConnectionStatus.REVOCATION_PENDING
         session.commit()
 
     for transfer_id in transfer_ids:
@@ -339,3 +339,10 @@ def resume_user_scheduling(
                 raise SessionAuthenticationError
             credential.scheduling_paused = False
             session.commit()
+
+
+def user_scheduling_paused(user_id: str, session_factory: SessionFactory) -> bool:
+    """Return whether scheduling is paused for a user."""
+    with session_factory() as session:
+        credential = session.get(MonzoCredential, user_id)
+        return bool(credential is not None and credential.scheduling_paused)

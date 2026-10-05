@@ -6,6 +6,7 @@ from alembic import command
 from alembic.config import Config
 
 from app.db.models import AppSession, MonzoCredential, UsedAppRefreshToken
+from app.domain.connection import ConnectionStatus
 from app.db.session import create_database_engine, create_session_factory
 from app.services.token_crypto import decrypt_token
 
@@ -85,7 +86,8 @@ def test_existing_plaintext_and_refresh_sessions_upgrade_safely(
     with create_session_factory(engine)() as session:
         credential = session.get(MonzoCredential, "legacy-user")
         assert decrypt_token(credential.access_token, settings) == marker
-        assert not credential.scheduling_paused and not credential.disconnected
+        assert not credential.scheduling_paused
+        assert credential.connection_status == ConnectionStatus.CONNECTED
         app_session = session.get(AppSession, "legacy-session")
         assert app_session.refresh_token_hash == current_hash
         assert app_session.revoked_at is None
@@ -149,5 +151,5 @@ def test_first_login_and_schedule_work_with_hardened_foreign_keys(tmp_path, sett
             ).status_code
             == 200
         )
-        assert client.post("/emergency-stop", headers=headers).status_code == 204
+        assert client.post("/disconnect", headers=headers).status_code == 204
     engine.dispose()

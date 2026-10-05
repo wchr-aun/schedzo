@@ -124,8 +124,8 @@ Emergency stop and disconnect invalidate all sessions for the user.
 | `POST /schedule-transfer` | Create a recurring schedule |
 | `DELETE /schedule-transfer/<setup_id>` | Deactivate the setup and cancel its pending occurrence; returns 204 |
 | `POST /logout` | Revoke the current app session; preserves schedules and the Monzo connection; returns 204 |
-| `POST /emergency-stop` | Pause scheduling, cancel pending transfers, revoke all app sessions, and disconnect Monzo |
-| `POST /disconnect` | Same behavior as emergency stop |
+| `POST /disconnect` | Pause scheduling, cancel pending transfers, revoke all app sessions, and disconnect Monzo |
+| `GET /scheduling-paused` | Return `{"paused": boolean}` for the authenticated user |
 | `POST /resume-transfers` | Clear the scheduling pause; does not reactivate cancelled setups; returns 204 |
 
 Transfer history returns `items`, `total`, `limit`, and `offset`. The default
