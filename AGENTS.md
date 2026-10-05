@@ -35,8 +35,8 @@ Keep route handlers small. Put reusable business logic in services and pure rule
 - Startup requires a valid `TOKEN_ENCRYPTION_KEY` and a `JWT_SECRET_KEY` of at least 32 bytes. Keep these keys distinct and preserve the encryption key across deployments and migrations.
 - Apply schema changes with `uv run alembic upgrade head`; do not use `metadata.create_all()` in application startup.
 - The scheduler, user locks, request limits, and refresh retry cache are process-local, so run one worker. OAuth state is signed, bound to the browser cookie, and its consumption is persisted.
-- Application refresh tokens rotate with a fixed five-second retry window and expire after 60 days without a successful rotation. Preserve session-specific logout and reuse detection, and invalidate all sessions on emergency stop/disconnect.
-- Emergency stop/disconnect persist a scheduling pause and retry provider revocation until confirmed. Reconnection requires explicit resume; cancelled setups stay deactivated.
+- Application refresh tokens rotate with a fixed five-second retry window and expire after 60 days without a successful rotation. Preserve session-specific logout and reuse detection, and invalidate all sessions on disconnect.
+- Disconnect deactivates active schedules, cancels pending transfers, and retries provider revocation until confirmed. Reconnection allows new schedules; cancelled setups stay deactivated.
 - Production requires `APP_ENV=production`, an HTTPS redirect URI, and a trusted proxy that replaces forwarding headers. API docs remain available.
 
 ## Development
@@ -47,7 +47,7 @@ The liveness endpoint is `GET /health`. Interactive docs are at `/docs` and `/re
 
 ## Tests
 
-Run the unit and integration suite with `uv run pytest`. Unit tests cover local logic and error branches; integration tests use `respx` to mock Monzo's HTTP responses while exercising the app's HTTP flow. Keep integration tests deterministic and offline. The architecture test guards against provider clients and the full resource container leaking into routers.
+After every code, schema, migration, or test change, run the full unit and integration suite with `uv run pytest` and report whether it passes. If the suite cannot run, state why and do not claim the changes are verified. Unit tests cover local logic and error branches; integration tests use `respx` to mock Monzo's HTTP responses while exercising the app's HTTP flow. Keep integration tests deterministic and offline. The architecture test guards against provider clients and the full resource container leaking into routers.
 
 Run `uv run python scripts/check_sensitive_files.py` before committing. It checks the Git index for credential files, SQLite databases/sidecars, and private-key content; it does not scan unstaged edits or Git history. Never commit database files or real credentials.
 

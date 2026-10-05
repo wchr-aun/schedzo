@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import Settings
 from app.db.models import MonzoCredential
 from app.db.session import SessionFactory
+from app.domain.connection import ConnectionStatus
 from app.domain.errors import (
     MonzoConnectionError,
     MonzoTokenResponseError,
@@ -37,7 +38,10 @@ async def resolve_monzo_access_token(
     try:
         with session_factory() as session:
             credential = session.get(MonzoCredential, user_id)
-            if credential is None or credential.disconnected:
+            if (
+                credential is None
+                or credential.connection_status != ConnectionStatus.CONNECTED
+            ):
                 raise MonzoConnectionError
             access_token = decrypt_token(credential.access_token, settings)
             expires_at = credential.expires_at
@@ -67,7 +71,10 @@ async def _refresh_access_token_locked(
     try:
         with session_factory() as session:
             credential = session.get(MonzoCredential, user_id)
-            if credential is None or credential.disconnected:
+            if (
+                credential is None
+                or credential.connection_status != ConnectionStatus.CONNECTED
+            ):
                 raise MonzoConnectionError
             access_token = decrypt_token(credential.access_token, settings)
             refresh_token = decrypt_token(credential.refresh_token, settings)
@@ -115,12 +122,12 @@ async def _refresh_access_token_locked(
             credential.token_type = refreshed.token_type
             credential.expires_at = now + timedelta(seconds=refreshed.expires_in)
             credential.updated_at = now
-            disconnected = credential.disconnected
+            connection_status = credential.connection_status
             session.commit()
     except SQLAlchemyError:
         raise TokenStorageError("Token storage is unavailable") from None
 
-    if disconnected:
+    if connection_status != ConnectionStatus.CONNECTED:
         raise MonzoConnectionError
     return refreshed.access_token
 

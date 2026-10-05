@@ -72,7 +72,7 @@ application authentication from resolving a usable Monzo connection.
 
 `services/authorization.py` validates signed access claims and persisted session
 state. Mutating workflows recheck authorization inside the user lock, so a request
-authenticated before logout or emergency stop cannot bypass later revocation.
+authenticated before logout or disconnect cannot bypass later revocation.
 
 `OAuthService` in `services/oauth.py` receives its client, settings, and session
 factory through its constructor. It owns the Monzo login workflow: exchange the
@@ -85,14 +85,14 @@ transaction. Database query helpers do not commit. `services/token_crypto.py`
 handles signing, hashing, and encryption without persistence or session policy.
 
 `services/monzo_credentials.py` resolves and refreshes provider credentials using
-separate per-user refresh locks. `services/disconnection.py` persists the scheduling
-pause and session revocation before attempting provider revocation, retaining
-retry state until provider disconnection is confirmed.
+separate per-user refresh locks. `services/disconnection.py` deactivates schedules,
+cancels pending transfers, and revokes app sessions before attempting provider
+revocation, retaining retry state until provider disconnection is confirmed.
 
 Refresh rotation preserves the fixed five-second retry window, 60-day inactivity
 expiry, persistent reuse detection, and session-specific logout. Retry results
 remain bounded, process-local, and scoped to the application session factory.
-Reconnection does not resume scheduling or reactivate cancelled setups.
+Reconnection permits new schedules but does not reactivate cancelled setups.
 
 ## Monzo client ownership
 

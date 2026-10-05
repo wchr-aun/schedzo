@@ -41,10 +41,6 @@ class ScheduleQuotaExceededError(ValueError):
     """The user has reached the active schedule limit."""
 
 
-class SchedulingPausedError(ValueError):
-    """Emergency stop must be explicitly cleared before creating schedules."""
-
-
 @dataclass(frozen=True)
 class ScheduleTransferCommand:
     scheduled_for: datetime

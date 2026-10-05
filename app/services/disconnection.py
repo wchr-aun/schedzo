@@ -10,12 +10,13 @@ from app.config import Settings
 from app.db.models import MonzoCredential
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext
+from app.domain.connection import ConnectionStatus
 from app.domain.scheduling import TransferJobs
 from app.domain.time import as_utc
 from app.observability import get_logger
 from app.services.monzo import MonzoClient, monzo_client_scope
 from app.services.monzo_credentials import monzo_refresh_lock
-from app.services.schedules import emergency_stop_user_transfers
+from app.services.schedules import disconnect_user_schedules
 from app.services.token_crypto import decrypt_token, encrypt_token
 from app.services.user_locks import user_execution_lock
 
@@ -51,7 +52,10 @@ async def _revoke_with_client(
 ) -> None:
     with session_factory() as session:
         credential = session.get(MonzoCredential, user_id)
-        if credential is None or not credential.revocation_pending:
+        if (
+            credential is None
+            or credential.connection_status != ConnectionStatus.REVOCATION_PENDING
+        ):
             return
         access = decrypt_token(credential.access_token, settings)
         refresh = decrypt_token(credential.refresh_token, settings)
@@ -105,7 +109,7 @@ async def _revoke_with_client(
         credential.access_token = ""
         credential.refresh_token = None
         credential.expires_at = datetime.now(timezone.utc)
-        credential.revocation_pending = False
+        credential.connection_status = ConnectionStatus.DISCONNECTED
         session.commit()
 
 
@@ -115,7 +119,8 @@ def retry_pending_disconnections(
     with session_factory() as session:
         users = session.scalars(
             select(MonzoCredential.user_id).where(
-                MonzoCredential.revocation_pending.is_(True)
+                MonzoCredential.connection_status
+                == ConnectionStatus.REVOCATION_PENDING
             )
         ).all()
     for user_id in users:
@@ -129,12 +134,11 @@ def disconnect_user(
     authentication: AuthenticationContext,
 ) -> bool:
     """Persist scheduling/session revocation before attempting provider disconnection."""
-    emergency_stop_user_transfers(
+    disconnect_user_schedules(
         scheduler,
         session_factory,
         authentication.user_id,
         session_token=authentication.session_token,
         settings=settings,
-        disconnect=True,
     )
     return retry_monzo_disconnection(authentication.user_id, session_factory, settings)

@@ -28,7 +28,6 @@ from app.domain.transfers import (
     ScheduledTransferDetails,
     ScheduleNotFoundError,
     ScheduleQuotaExceededError,
-    SchedulingPausedError,
     TransferStatus,
 )
 from app.schemas.tasks import (
@@ -40,7 +39,6 @@ from app.services.disconnection import disconnect_user
 from app.services.schedules import (
     cancel_scheduled_transfer,
     list_scheduled_transfers,
-    resume_user_scheduling,
     schedule_transfer,
 )
 from app.services.sessions import logout_session
@@ -77,15 +75,14 @@ def logout(
 
 
 @router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
-@router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
-def emergency_stop(
+def disconnect(
     authentication: AuthenticationContext = Depends(authenticated_session),
     settings: Settings = Depends(get_settings),
     session_factory: SessionFactory = Depends(get_session_factory),
     scheduler: TransferJobs = Depends(get_transfer_jobs),
 ) -> Response:
     try:
-        disconnected = disconnect_user(
+        revoked = disconnect_user(
             scheduler,
             session_factory,
             settings,
@@ -97,7 +94,7 @@ def emergency_stop(
         raise HTTPException(
             status_code=503, detail="Scheduled transfer storage is unavailable"
         ) from exc
-    if not disconnected:
+    if not revoked:
         return JSONResponse(
             {"detail": "Schedules stopped; Monzo disconnection pending"},
             status_code=202,
@@ -183,11 +180,6 @@ def create_scheduled_transfer(
         )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None
-    except SchedulingPausedError:
-        raise HTTPException(
-            status_code=409,
-            detail="Scheduling is paused; explicitly resume before creating transfers",
-        ) from None
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ScheduleQuotaExceededError as exc:
@@ -229,29 +221,6 @@ def cancel_transfer_schedule(
         ) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/resume-transfers", status_code=204)
-def resume_transfers(
-    authentication: AuthenticationContext = Depends(authenticated_session),
-    settings: Settings = Depends(get_settings),
-    session_factory: SessionFactory = Depends(get_session_factory),
-) -> Response:
-    user_id = authentication.user_id
-    try:
-        resume_user_scheduling(
-            user_id,
-            authentication.session_token,
-            session_factory,
-            settings,
-        )
-    except SessionAuthenticationError:
-        raise HTTPException(status_code=401, detail="Session revoked") from None
-    except SQLAlchemyError:
-        raise HTTPException(
-            status_code=503, detail="Session storage is unavailable"
-        ) from None
-    return Response(status_code=204)
 
 
 def _transfer_response(transfer: ScheduledTransferDetails) -> ScheduledTransferResponse:

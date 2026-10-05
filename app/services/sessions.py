@@ -17,6 +17,7 @@ from app.db.session_queries import (
     find_refresh_identity,
 )
 from app.domain.authentication import AuthenticationContext
+from app.domain.connection import ConnectionStatus
 from app.domain.errors import (
     AppSessionQuotaError,
     MonzoDisconnectPendingError,
@@ -64,13 +65,16 @@ def _save_monzo_tokens(
     if issued_today >= MAX_APP_SESSIONS_PER_USER_PER_DAY:
         raise AppSessionQuotaError
     credential = session.get(MonzoCredential, token_response.user_id)
-    if credential is not None and credential.revocation_pending:
+    if (
+        credential is not None
+        and credential.connection_status == ConnectionStatus.REVOCATION_PENDING
+    ):
         raise MonzoDisconnectPendingError
     if credential is None:
         credential = MonzoCredential(user_id=token_response.user_id, session_version=1)
         session.add(credential)
 
-    credential.disconnected = False
+    credential.connection_status = ConnectionStatus.CONNECTED
     credential.access_token = encrypt_token(token_response.access_token, settings)
     credential.refresh_token = encrypt_token(token_response.refresh_token, settings)
     credential.token_type = token_response.token_type

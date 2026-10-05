@@ -59,7 +59,7 @@ def test_duplicates_do_not_use_rotation_quota(client, settings, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("operation", ["/logout", "/emergency-stop"])
+@pytest.mark.parametrize("operation", ["/logout", "/disconnect"])
 def test_replay_cache_cannot_bypass_revocation(client, settings, operation):
     pair = login(client, settings)
     response = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
