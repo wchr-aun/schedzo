@@ -129,3 +129,16 @@ Before committing, stage the intended files and run
 `uv run python scripts/check_sensitive_files.py`. Continue to apply migrations
 with Alembic and run one application worker; this refactor does not change the
 schema, deployment model, or public API contract.
+
+## Telemetry ownership
+
+`app/telemetry/` owns explicit OpenTelemetry providers, bounded background
+exporters, a sanitized application-event logging bridge, and the official
+FastAPI instrumentor. The lifespan constructs providers, installs the library's
+HTTP instrumentation, and removes it on cleanup; app imports start no export
+workers. Library instrumentation observes security and body-limit rejections.
+A small middleware adds request/log correlation, and a span processor filters
+automatically captured attributes, exceptions, and trace state before export. Routers and business services
+keep using the existing logging helpers. No provider is registered globally and
+no monitoring transport uses the Monzo HTTP client. See
+[observability](observability.md) for data boundaries and delivery limitations.

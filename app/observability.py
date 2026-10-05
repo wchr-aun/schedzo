@@ -25,6 +25,12 @@ def configure_logging() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     logging.getLogger(LOGGER_NAME).setLevel(logging.INFO)
+    # Migration logging configuration can disable existing application loggers.
+    for name, candidate in logging.Logger.manager.loggerDict.copy().items():
+        if isinstance(candidate, logging.Logger) and (
+            name == LOGGER_NAME or name.startswith(f"{LOGGER_NAME}.")
+        ):
+            candidate.disabled = False
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -44,7 +50,7 @@ def monzo_error_details(response: Any) -> tuple[str, str]:
     """Return a fixed diagnostic without trusting fields from upstream errors."""
     try:
         payload = response.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return "unknown", "unknown"
 
     if not isinstance(payload, dict):

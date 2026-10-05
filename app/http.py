@@ -49,7 +49,7 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
     async def log_request_failures(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        request_id = uuid6().hex
+        request_id = getattr(request.state, "request_id", None) or uuid6().hex
         request.state.request_id = request_id
         started_at = monotonic()
         if request.url.path not in {
