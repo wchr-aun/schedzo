@@ -86,7 +86,14 @@ Cloud logs export `schedzo` application logger events at INFO and above. The
 bridge exports an approved event name as the body, severity, logger name, fixed
 allowlisted failure reasons, and numeric status/duration/count fields. Request
 logs also include request ID and route template; the logging bridge attaches the
-active trace/span IDs. Transfer/account/pot IDs, arbitrary `extra` fields,
+active trace/span IDs. After application-session authentication succeeds, all
+subsequent application logs in that request include the verified `user_id`,
+including service logs and middleware error logs. It is an identifying value
+sent to Grafana Cloud as structured log metadata, not a metric or indexed stream
+label. Failed authentication, public requests, and scheduled jobs do not receive
+this request-specific identity. Context is isolated between requests and cleared
+when the request ends. Identity supplied in log messages or `extra` fields is not
+trusted. Transfer/account/pot IDs, arbitrary `extra` fields,
 exception content, and free-form messages are omitted. Unknown event messages
 become `application_log_redacted`. The event/reason allowlists live in
 `app/telemetry/logs.py`; extend them deliberately when introducing a new event.
@@ -153,6 +160,12 @@ histogram_quantile(0.95, sum by (le, http_route) (
 
 ```logql
 {service_name="schedzo"} |= "request_failed"
+```
+
+Filter logs for an authenticated user using structured metadata:
+
+```logql
+{service_name="schedzo"} | user_id="user_example"
 ```
 
 The logs' severity is normally available as `severity_text` structured metadata:

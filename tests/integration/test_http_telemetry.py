@@ -1,9 +1,13 @@
 """Offline tests of the exported telemetry, including middleware rejection paths."""
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier
 
 import pytest
+from fastapi import Depends
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -25,7 +29,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base
+from app.dependencies import authenticated_session
+from app.domain.authentication import AuthenticationContext
+from app.domain.monzo import MonzoTokenResponse
 from app.main import create_app
+from app.services.sessions import issue_app_session
 from app.telemetry.runtime import BUCKETS, METRIC_ATTRIBUTES, Telemetry
 from app.telemetry.spans import SanitizingSpanProcessor
 
@@ -79,6 +87,32 @@ def telemetry_app(settings):
     def failure():
         raise RuntimeError("sensitive-exception-token")
 
+    authenticated_requests = Barrier(2)
+
+    @application.get("/telemetry-auth/{mode}")
+    def authenticated_probe(
+        mode: str,
+        authentication: AuthenticationContext = Depends(authenticated_session),
+    ):
+        if mode == "concurrent":
+            authenticated_requests.wait(timeout=5)
+        logging.getLogger("schedzo").info(
+            "scheduled_transfer_completed",
+            extra={"user_id": "spoofed-user", "access_token": "private-token"},
+        )
+        if mode == "exception":
+            raise RuntimeError("private-token")
+        if mode == "rejection":
+            return JSONResponse({"detail": "rejected"}, status_code=400)
+        return {"ok": True}
+
+    @application.get("/telemetry-auth-async")
+    async def authenticated_async_probe(
+        authentication: AuthenticationContext = Depends(authenticated_session),
+    ):
+        logging.getLogger("schedzo").info("scheduled_transfer_completed")
+        return {"ok": True}
+
     try:
         with TestClient(
             application,
@@ -100,6 +134,105 @@ def metric_points(reader):
         for metric in scope.metrics
         for point in metric.data.data_points
     ]
+
+
+def session_token(client, settings, user_id):
+    return issue_app_session(
+        MonzoTokenResponse(
+            user_id=user_id, access_token="private-token", expires_in=3600
+        ),
+        client.app.state.resources.session_factory,
+        settings,
+    ).access_token
+
+
+@pytest.mark.parametrize(
+    "path,status_code",
+    [
+        ("/telemetry-auth/success", 200),
+        ("/telemetry-auth-async", 200),
+        ("/telemetry-auth/rejection", 400),
+        ("/telemetry-auth/exception", 500),
+    ],
+)
+def test_authenticated_user_enriches_logs_without_leaking_between_requests(
+    telemetry_app, settings, path, status_code
+):
+    client, _runtime, spans, logs, reader = telemetry_app
+    logs.clear()  # Startup events have no authenticated request context.
+    token = session_token(client, settings, "user_first")
+    response = client.get(path, headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == status_code
+    authenticated_logs = [r.log_record for r in logs.get_finished_logs()]
+    assert authenticated_logs
+    assert all(r.attributes["user_id"] == "user_first" for r in authenticated_logs)
+    assert "spoofed-user" not in str([r.attributes for r in authenticated_logs])
+    assert "private-token" not in str([r.attributes for r in authenticated_logs])
+    assert all("user_id" not in span.attributes for span in spans.get_finished_spans())
+    assert all("user_id" not in point.attributes for point in metric_points(reader))
+
+    response = client.get(
+        "/telemetry-auth/success",
+        headers={
+            "Authorization": f"Bearer {session_token(client, settings, 'user_second')}"
+        },
+    )
+    assert response.status_code == 200
+    assert (
+        logs.get_finished_logs()[-1].log_record.attributes["user_id"] == "user_second"
+    )
+
+    logs.clear()
+    invalid_token = session_token(
+        client,
+        replace(settings, jwt_secret_key="different-signing-secret-at-least-32-bytes"),
+        "unverified-user",
+    )
+    assert (
+        client.get(
+            "/telemetry-auth/success",
+            headers={"Authorization": f"Bearer {invalid_token}"},
+        ).status_code
+        == 401
+    )
+    assert client.get("/telemetry-auth/success").status_code == 401
+    assert client.get("/telemetry-test/public").status_code == 200
+    logging.getLogger("schedzo").info("scheduled_transfer_completed")
+    assert logs.get_finished_logs()
+    assert all(
+        "user_id" not in r.log_record.attributes for r in logs.get_finished_logs()
+    )
+
+
+def test_concurrent_authenticated_requests_keep_distinct_user_context(
+    telemetry_app, settings
+):
+    client, _runtime, _spans, logs, _reader = telemetry_app
+    logs.clear()
+    tokens = {
+        user_id: session_token(client, settings, user_id)
+        for user_id in ("user_first", "user_second")
+    }
+
+    def request(user_id):
+        return client.get(
+            "/telemetry-auth/concurrent",
+            headers={"Authorization": f"Bearer {tokens[user_id]}"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(request, ("user_first", "user_second")))
+    assert all(response.status_code == 200 for response in responses)
+    identities = {
+        r.log_record.attributes["request_id"]: r.log_record.attributes["user_id"]
+        for r in logs.get_finished_logs()
+    }
+    assert identities == {
+        response.headers["X-Request-ID"]: user_id
+        for response, user_id in zip(
+            responses, ("user_first", "user_second"), strict=True
+        )
+    }
 
 
 def test_requests_group_by_template_and_logs_correlate(telemetry_app):

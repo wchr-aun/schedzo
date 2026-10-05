@@ -24,6 +24,7 @@ from app.services.monzo import MonzoClient
 from app.services.monzo_credentials import resolve_monzo_access_token
 from app.services.oauth import OAuthService
 from app.services.resources import ResourceService
+from app.telemetry.logs import bind_authenticated_user
 
 logger = get_logger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -89,7 +90,7 @@ def authenticated_session(
         _raise_unauthorized("Bearer token required")
 
     try:
-        return authenticate_session(
+        authentication = authenticate_session(
             authorization.credentials, settings, session_factory
         )
     except SessionAuthenticationError:
@@ -104,6 +105,9 @@ def authenticated_session(
             request.url.path,
         )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    bind_authenticated_user(authentication.user_id)
+    return authentication
 
 
 async def monzo_session(

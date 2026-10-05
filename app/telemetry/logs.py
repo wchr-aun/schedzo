@@ -8,6 +8,16 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 request_context: ContextVar[dict | None] = ContextVar("telemetry_request", default=None)
 
+
+def bind_authenticated_user(user_id: str) -> None:
+    """Enrich the current request only after its application session is verified."""
+    context = request_context.get()
+    if context is not None:
+        # Sync dependencies run in a copied thread context. Mutate the request's
+        # shared dictionary so async handlers and outer middleware see the result.
+        context["user_id"] = user_id
+
+
 EVENTS = frozenset(
     {
         "oauth_redirect_failed",
@@ -116,6 +126,8 @@ class EventLogHandler(LoggingHandler):
                         "http.route": context["route"],
                     }
                 )
+                if "user_id" in context:
+                    attributes["user_id"] = context["user_id"]
             safe = logging.LogRecord(
                 logger_name, record.levelno, "", 0, event, (), None
             )
