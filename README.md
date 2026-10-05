@@ -247,3 +247,10 @@ production environment and server prerequisites in the
 ## License
 
 Licensed under the [MIT License](LICENSE). Copyright (c) 2026 wchr-aun.
+
+## Application telemetry
+
+Optional OpenTelemetry export sends endpoint metrics, application event logs, and
+request traces directly to Grafana Cloud. It is disabled by default. See the
+[observability guide](docs/observability.md) for configuration, data protection,
+resource limits, offline verification, and the importable Grafana dashboard.

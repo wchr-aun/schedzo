@@ -10,6 +10,7 @@ from app.db.session import SessionFactory
 from app.domain.scheduling import TransferJobs
 from app.rate_limit import RequestRateLimiter
 from app.services.monzo import MonzoClient
+from app.telemetry import Telemetry
 
 
 @dataclass(frozen=True)
@@ -22,3 +23,4 @@ class ApplicationResources:
     monzo_client: MonzoClient
     oauth_start_rate_limiter: RequestRateLimiter
     request_rate_limiter: RequestRateLimiter
+    telemetry: Telemetry | None = None

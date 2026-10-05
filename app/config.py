@@ -2,9 +2,10 @@
 
 import base64
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -24,10 +25,21 @@ class Settings:
     jwt_expiration_seconds: int = 900
     environment: str = "development"
 
+    otel_enabled: bool = False
+    otel_service_name: str = "schedzo"
+    otel_endpoint: str = ""
+    otel_headers: str = field(default="", repr=False)
+    otel_trace_sample_ratio: float = 1.0
+
     @classmethod
-    def from_environment(cls) -> "Settings":
+    def from_environment(cls) -> Settings:
         load_dotenv(dotenv_path=ENV_FILE, override=False)
         return cls(
+            otel_enabled=os.getenv("OTEL_ENABLED", "false").lower() == "true",
+            otel_service_name=os.getenv("OTEL_SERVICE_NAME", "schedzo"),
+            otel_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+            otel_headers=os.getenv("OTEL_EXPORTER_OTLP_HEADERS", ""),
+            otel_trace_sample_ratio=float(os.getenv("OTEL_TRACE_SAMPLE_RATIO", "1.0")),
             environment=os.getenv("APP_ENV", "development"),
             monzo_client_id=os.getenv("MONZO_CLIENT_ID", ""),
             monzo_client_secret=os.getenv("MONZO_CLIENT_SECRET", ""),
@@ -72,7 +84,8 @@ def validate_settings(settings: Settings) -> None:
                     settings.token_encryption_key,
                     settings.bff_api_key,
                 }
-            ) != 3
+            )
+            != 3
         ):
             raise RuntimeError("Signing, encryption, and BFF keys must be distinct")
         if base64.urlsafe_b64decode(settings.token_encryption_key) in {
@@ -80,3 +93,41 @@ def validate_settings(settings: Settings) -> None:
             b"\0" * 32,
         }:
             raise RuntimeError("Production encryption key must not be a test key")
+
+    if settings.otel_enabled:
+        endpoint = urlparse(settings.otel_endpoint)
+        if (
+            endpoint.scheme != "https"
+            or not endpoint.hostname
+            or endpoint.username
+            or endpoint.password
+            or endpoint.query
+            or endpoint.fragment
+        ):
+            raise RuntimeError(
+                "Telemetry requires an HTTPS OTLP base endpoint without credentials or query parameters"
+            )
+        if (
+            not settings.otel_headers
+            or any(
+                "=" not in item
+                or not item.split("=", 1)[0].strip()
+                or not item.split("=", 1)[1].strip()
+                for item in settings.otel_headers.split(",")
+            )
+            or "\n" in settings.otel_headers
+            or "\r" in settings.otel_headers
+        ):
+            raise RuntimeError(
+                "OTEL_EXPORTER_OTLP_HEADERS must contain nonempty key=value entries"
+            )
+        for entry in settings.otel_headers.split(","):
+            name, value = entry.split("=", 1)
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", name.strip()) or any(
+                ord(char) < 32 or ord(char) == 127 for char in unquote(value)
+            ):
+                raise RuntimeError("OTLP header names or values are invalid")
+        if not 0 <= settings.otel_trace_sample_ratio <= 1:
+            raise RuntimeError("OTEL_TRACE_SAMPLE_RATIO must be between 0 and 1")
+        if not settings.otel_service_name or len(settings.otel_service_name) > 128:
+            raise RuntimeError("OTEL_SERVICE_NAME must contain 1 to 128 characters")
