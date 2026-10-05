@@ -47,7 +47,7 @@ The liveness endpoint is `GET /health`. Interactive docs are at `/docs` and `/re
 
 ## Tests
 
-Run the unit and integration suite with `uv run pytest`. Unit tests cover local logic and error branches; integration tests use `respx` to mock Monzo's HTTP responses while exercising the app's HTTP flow. Keep integration tests deterministic and offline. The architecture test guards against provider clients and the full resource container leaking into routers.
+After every code, schema, migration, or test change, run the full unit and integration suite with `uv run pytest` and report whether it passes. If the suite cannot run, state why and do not claim the changes are verified. Unit tests cover local logic and error branches; integration tests use `respx` to mock Monzo's HTTP responses while exercising the app's HTTP flow. Keep integration tests deterministic and offline. The architecture test guards against provider clients and the full resource container leaking into routers.
 
 Run `uv run python scripts/check_sensitive_files.py` before committing. It checks the Git index for credential files, SQLite databases/sidecars, and private-key content; it does not scan unstaged edits or Git history. Never commit database files or real credentials.
 
