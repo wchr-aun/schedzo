@@ -8,7 +8,7 @@ import jwt
 from cryptography.fernet import Fernet
 
 from app.config import Settings
-from app.domain.errors import SessionAuthenticationError
+from app.domain.errors import AccessTokenExpiredError, SessionAuthenticationError
 
 
 def hash_refresh_token(refresh_token: str) -> str:
@@ -75,5 +75,7 @@ def decode_access_claims(token: str, settings: Settings) -> dict:
             algorithms=["HS256"],
             options={"require": ["sub", "exp", "ver"]},
         )
+    except jwt.ExpiredSignatureError as exc:
+        raise AccessTokenExpiredError from exc
     except jwt.InvalidTokenError as exc:
         raise SessionAuthenticationError from exc

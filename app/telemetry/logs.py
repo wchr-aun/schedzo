@@ -39,6 +39,15 @@ EVENTS = frozenset(
         "scheduled_transfer_storage_failed",
         "request_failed",
         "request_completed_with_error",
+        "request_completed",
+        "request_rejected",
+        "monzo_request_started",
+        "monzo_request_completed",
+        "monzo_request_transport_failed",
+        "scheduled_transfer_created",
+        "scheduled_transfer_cancelled",
+        "app_session_logged_out",
+        "endpoint_entered",
     }
 )
 
@@ -46,6 +55,7 @@ REASONS = frozenset(
     {
         "bearer_token_missing",
         "invalid_or_expired_jwt",
+        "access_token_expired",
         "storage_or_configuration",
         "monzo_connection_unavailable",
         "invalid_response",
@@ -72,6 +82,9 @@ LOGGER_NAMES = frozenset(
         "schedzo.app.services.monzo_credentials",
         "schedzo.app.services.monzo",
         "schedzo.app.services.transfer_execution",
+        "schedzo.app.services.schedules",
+        "schedzo.app.services.sessions",
+        "schedzo.app.routers.resources",
     }
 )
 
@@ -89,6 +102,11 @@ class EventLogHandler(LoggingHandler):
             return
         try:
             template = record.msg if isinstance(record.msg, str) else ""
+            # Entry logs happen before authentication, so they cannot carry the
+            # authenticated user attribute required for exported request logs.
+            # Keep them in application logs while avoiding incomplete telemetry.
+            if template.startswith("endpoint_entered "):
+                return
             event = template.split(" ", 1)[0]
             if event not in EVENTS:
                 event = "application_log_redacted"
@@ -114,6 +132,7 @@ class EventLogHandler(LoggingHandler):
                                 "upstream_status",
                                 "duration_ms",
                                 "count",
+                                "cancelled_count",
                             }
                             and type(value) is int
                             and 0 <= value < 10**10

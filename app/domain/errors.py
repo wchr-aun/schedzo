@@ -5,6 +5,10 @@ class SessionAuthenticationError(Exception):
     """The application session token is missing or invalid."""
 
 
+class AccessTokenExpiredError(SessionAuthenticationError):
+    """The signed application access token has reached its expiry time."""
+
+
 class MonzoConnectionError(Exception):
     """The user does not have usable Monzo credentials."""
 

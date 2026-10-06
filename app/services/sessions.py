@@ -26,6 +26,7 @@ from app.domain.errors import (
 from app.domain.monzo import MonzoTokenResponse
 from app.domain.sessions import AppTokenPair
 from app.domain.time import as_utc
+from app.observability import get_logger
 from app.services.authorization import authenticate_session
 from app.services.refresh_replay import refresh_replay_cache
 from app.services.token_crypto import (
@@ -39,6 +40,7 @@ APP_REFRESH_TOKEN_TTL = timedelta(days=60)
 MAX_APP_SESSIONS_PER_USER_PER_DAY = 20
 MAX_REFRESHES_PER_USER_PER_HOUR = 60
 _REFRESH_LOCKS = tuple(Lock() for _ in range(32))
+logger = get_logger(__name__)
 
 
 def issue_app_session(
@@ -49,7 +51,8 @@ def issue_app_session(
     """Persist provider credentials and issue an application session atomically."""
     with user_execution_lock(token_response.user_id), session_factory() as session:
         with session.begin():
-            return _save_monzo_tokens(token_response, session, settings)
+            token_pair = _save_monzo_tokens(token_response, session, settings)
+    return token_pair
 
 
 def _save_monzo_tokens(
@@ -141,6 +144,7 @@ def logout_session(
                 credential = session.get(MonzoCredential, current.user_id)
                 if credential is not None:
                     credential.session_version += 1
+    logger.info("app_session_logged_out")
 
 
 def rotate_app_refresh_token(

@@ -45,6 +45,7 @@ def _client_for_settings(settings):
 
 
 def test_health_route(client):
+    client.headers.pop("X-BFF-API-Key")
     response = client.get("/health")
 
     assert response.status_code == 200
@@ -52,6 +53,14 @@ def test_health_route(client):
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_health_route_with_trailing_slash_does_not_require_bff_key(client):
+    client.headers.pop("X-BFF-API-Key")
+    response = client.get("/health/")
+
+    assert response.status_code == 200
+    assert response.json() == {"message": "ok"}
 
 
 def test_health_route_adds_hsts_over_https(client):
