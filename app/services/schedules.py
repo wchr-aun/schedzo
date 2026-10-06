@@ -24,11 +24,13 @@ from app.domain.transfers import (
     TransferStatus,
     TransferType,
 )
+from app.observability import get_logger
 from app.services.authorization import decode_user_id
 from app.services.user_locks import user_execution_lock
 
 MAX_ACTIVE_SCHEDULES_PER_USER = 50
 MAX_SCHEDULE_CREATIONS_PER_USER_PER_DAY = 100
+logger = get_logger(__name__)
 
 
 def list_scheduled_transfers(
@@ -181,6 +183,13 @@ def _schedule_transfer_unlocked(
             scheduler.remove(transfer.transfer_id)
         raise
 
+    logger.info(
+        "scheduled_transfer_created setup_id=%s transfer_id=%s transfer_type=%s interval=%s",
+        result.setup_id,
+        result.transfer_id,
+        result.transfer_type.value,
+        result.interval.value,
+    )
     return result
 
 
@@ -250,6 +259,11 @@ def _cancel_scheduled_transfer_locked(
 
     for transfer_id in transfer_ids:
         scheduler.remove(transfer_id)
+    logger.info(
+        "scheduled_transfer_cancelled setup_id=%s cancelled_count=%d",
+        setup_id,
+        len(transfer_ids),
+    )
     return None
 
 

@@ -577,3 +577,37 @@ def test_authentication_failure_is_traceable_without_logging_token(client, caplo
     assert f"request_id={request_id}" in caplog.text
     assert "status_code=401" in caplog.text
     assert bearer_token not in caplog.text
+
+
+def test_expired_access_token_is_logged_at_info_without_request_warning(
+    client, settings, caplog
+):
+    caplog.set_level(logging.INFO)
+    expired_token = jwt.encode(
+        {
+            "sub": "user_test123",
+            "ver": 0,
+            "iat": datetime.now(timezone.utc) - timedelta(hours=2),
+            "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+        },
+        settings.jwt_secret_key,
+        algorithm="HS256",
+    )
+
+    response = client.get(
+        "/accounts-with-balances",
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert response.status_code == 401
+    assert (
+        "authentication_failed path=/accounts-with-balances "
+        "reason=access_token_expired" in caplog.text
+    )
+    assert "request_completed_with_error" not in caplog.text
+    record = next(
+        record
+        for record in caplog.records
+        if "reason=access_token_expired" in record.getMessage()
+    )
+    assert record.levelno == logging.INFO

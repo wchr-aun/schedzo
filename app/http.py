@@ -8,6 +8,8 @@ from uuid import uuid6
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import iter_route_contexts
+from starlette.routing import Match
 
 from app.observability import get_logger
 from app.request_bounds import RequestBoundsMiddleware
@@ -52,7 +54,8 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
         request_id = getattr(request.state, "request_id", None) or uuid6().hex
         request.state.request_id = request_id
         started_at = monotonic()
-        if request.url.path not in {
+        api_key_exempt_path = request.url.path.rstrip("/") or "/"
+        if api_key_exempt_path not in {
             "/health",
             "/monzo-callback",
             "/docs",
@@ -67,6 +70,12 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
                 )
                 response.headers["X-Request-ID"] = request_id
                 add_security_headers(response, request)
+                logger.warning(
+                    "request_rejected request_id=%s reason=invalid_bff_key method=%s path=%s",
+                    request_id,
+                    request.method,
+                    request.url.path,
+                )
                 return response
         client_host = request.client.host if request.client is not None else "unknown"
         if not request.app.state.resources.request_rate_limiter.allow(client_host):
@@ -76,7 +85,20 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
             response.headers["X-Request-ID"] = request_id
             response.headers["Retry-After"] = "60"
             add_security_headers(response, request)
+            logger.warning(
+                "request_rejected request_id=%s reason=rate_limited method=%s path=%s",
+                request_id,
+                request.method,
+                request.url.path,
+            )
             return response
+        route = _route_template(request)
+        logger.info(
+            "endpoint_entered request_id=%s method=%s endpoint=%s",
+            request_id,
+            request.method,
+            route,
+        )
         try:
             response = await call_next(request)
         except Exception as exc:
@@ -93,7 +115,19 @@ def register_http_middleware(application: FastAPI, *, production: bool) -> None:
 
         response.headers["X-Request-ID"] = request_id
         add_security_headers(response, request)
-        if response.status_code >= 400:
+        logger.info(
+            "request_completed request_id=%s method=%s path=%s status_code=%d duration_ms=%d",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            round((monotonic() - started_at) * 1000),
+        )
+        expired_access_token = (
+            getattr(request.state, "authentication_failure_reason", None)
+            == "access_token_expired"
+        )
+        if response.status_code >= 400 and not expired_access_token:
             log = logger.error if response.status_code >= 500 else logger.warning
             log(
                 "request_completed_with_error request_id=%s method=%s path=%s "
@@ -120,3 +154,12 @@ def add_security_headers(response: Response, request: Request) -> None:
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
+
+
+def _route_template(request: Request) -> str:
+    """Return the matched route pattern without logging path parameter values."""
+    for route in iter_route_contexts(request.app.routes):
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", "unmatched")
+    return "unmatched"

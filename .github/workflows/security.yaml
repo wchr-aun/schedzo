@@ -17,4 +17,5 @@ jobs:
         with:
           version: '0.12.19'
           python-version: '3.14'
+          enable-cache: false
       - run: python scripts/check_sensitive_files.py

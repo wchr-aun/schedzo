@@ -1,8 +1,10 @@
 """Injectable Monzo client; its HTTP transport belongs to one event loop."""
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
+from time import monotonic
 from urllib.parse import quote
 
 import httpx
@@ -40,7 +42,9 @@ class MonzoClient:
     async def exchange_authorization_code(
         self, code: str, settings: Settings
     ) -> MonzoTokenResponse:
-        response = await self.http.post(
+        response = await self._request(
+            "POST",
+            "/oauth2/token",
             f"{MONZO_API_URL}/oauth2/token",
             data={
                 "grant_type": "authorization_code",
@@ -56,7 +60,9 @@ class MonzoClient:
     async def refresh_access_token(
         self, refresh_token: str, settings: Settings
     ) -> MonzoTokenResponse:
-        response = await self.http.post(
+        response = await self._request(
+            "POST",
+            "/oauth2/token",
             f"{MONZO_API_URL}/oauth2/token",
             data={
                 "grant_type": "refresh_token",
@@ -159,7 +165,9 @@ class MonzoClient:
     async def _get(
         self, path: str, access_token: str, *, params: dict[str, str] | None = None
     ) -> httpx.Response:
-        return await self.http.get(
+        return await self._request(
+            "GET",
+            path,
             f"{MONZO_API_URL}{path}",
             params=params,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -168,7 +176,9 @@ class MonzoClient:
     async def _post(
         self, path: str, access_token: str, *, data: dict[str, str]
     ) -> httpx.Response:
-        return await self.http.post(
+        return await self._request(
+            "POST",
+            path,
             f"{MONZO_API_URL}{path}",
             data=data,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -177,11 +187,38 @@ class MonzoClient:
     async def _put(
         self, path: str, access_token: str, *, data: dict[str, str]
     ) -> httpx.Response:
-        return await self.http.put(
+        return await self._request(
+            "PUT",
+            path,
             f"{MONZO_API_URL}{path}",
             data=data,
             headers={"Authorization": f"Bearer {access_token}"},
         )
+
+    async def _request(self, method: str, path: str, url: str, **kwargs) -> httpx.Response:
+        # Mask resource identifiers embedded in transfer endpoints.
+        endpoint = re.sub(r"(/pots/)[^/]+(/(?:deposit|withdraw))", r"\1{id}\2", path)
+        started_at = monotonic()
+        logger.info("monzo_request_started method=%s endpoint=%s", method, endpoint)
+        try:
+            response = await self.http.request(method, url, **kwargs)
+        except httpx.RequestError as exc:
+            logger.error(
+                "monzo_request_transport_failed method=%s endpoint=%s exception_type=%s duration_ms=%d",
+                method,
+                endpoint,
+                type(exc).__name__,
+                round((monotonic() - started_at) * 1000),
+            )
+            raise
+        logger.info(
+            "monzo_request_completed method=%s endpoint=%s status_code=%d duration_ms=%d",
+            method,
+            endpoint,
+            response.status_code,
+            round((monotonic() - started_at) * 1000),
+        )
+        return response
 
     async def revoke_access(self, access_token: str) -> None:
         response = await self._post("/oauth2/logout", access_token, data={})

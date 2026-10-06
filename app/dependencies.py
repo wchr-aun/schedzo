@@ -10,6 +10,7 @@ from app.config import Settings
 from app.db.session import SessionFactory
 from app.domain.authentication import AuthenticationContext, MonzoSession
 from app.domain.errors import (
+    AccessTokenExpiredError,
     MonzoConnectionError,
     MonzoTokenResponseError,
     SessionAuthenticationError,
@@ -93,6 +94,13 @@ def authenticated_session(
         authentication = authenticate_session(
             authorization.credentials, settings, session_factory
         )
+    except AccessTokenExpiredError:
+        request.state.authentication_failure_reason = "access_token_expired"
+        logger.info(
+            "authentication_failed path=%s reason=access_token_expired",
+            request.url.path,
+        )
+        _raise_unauthorized("Invalid or expired bearer token")
     except SessionAuthenticationError:
         logger.warning(
             "authentication_failed path=%s reason=invalid_or_expired_jwt",

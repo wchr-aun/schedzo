@@ -24,6 +24,8 @@ This is a Python 3.14+ FastAPI service for scheduling Monzo savings-pot deposits
 
 Keep route handlers small. Put reusable business logic in services and pure rules in the domain. Keep provider clients out of the router layer: routers must not import, receive, construct, or fetch `MonzoClient` or HTTP transport clients. Inject `ResourceService` and `OAuthService` through focused dependency providers instead. Providers construct services with the lifespan-owned client; services never access `app.state` or create a per-request transport. Do not inject the full `ApplicationResources` container into routers. Shared resources remain typed in `app.state.resources`. Services must not depend on routers, FastAPI request objects, or HTTP request schemas.
 
+When adding an endpoint or a major service, persistence, provider, or background-job action, add structured logs for its entry and important state transitions or outcomes so failures can be traced. Prefer centralized HTTP middleware for request entry and completion rather than repeating those logs in every route. Use the existing `schedzo` logging and telemetry conventions, include safe correlation and operation fields, and never log credentials, tokens, authorization codes, request bodies, or query strings. Mask sensitive identifiers when they appear in endpoint paths or log fields.
+
 ## Configuration and security
 
 - Read secrets from environment variables; never hard-code or commit them.
@@ -48,6 +50,8 @@ The liveness endpoint is `GET /health`. Interactive docs are at `/docs` and `/re
 ## Tests
 
 After every code, schema, migration, or test change, run the full unit and integration suite with `uv run pytest` and report whether it passes. If the suite cannot run, state why and do not claim the changes are verified. Unit tests cover local logic and error branches; integration tests use `respx` to mock Monzo's HTTP responses while exercising the app's HTTP flow. Keep integration tests deterministic and offline. The architecture test guards against provider clients and the full resource container leaking into routers.
+
+Check every newly added test against the pre-change implementation before considering it complete. For tests covering changed or newly added behavior, confirm the test fails for the intended reason against the baseline, then passes against the changed implementation. Use the prior revision or an isolated worktree when needed so the baseline check does not disturb ongoing changes. If a meaningful baseline check is not possible, explain why and do not claim the test proves the change fixes a regression.
 
 Run `uv run python scripts/check_sensitive_files.py` before committing. It checks the Git index for credential files, SQLite databases/sidecars, and private-key content; it does not scan unstaged edits or Git history. Never commit database files or real credentials.
 
