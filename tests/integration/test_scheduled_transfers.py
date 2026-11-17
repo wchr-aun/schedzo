@@ -7,6 +7,7 @@ import httpx
 import jwt
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 from app.db.models import (
     MonzoCredential,
@@ -17,6 +18,12 @@ from app.domain.time import UK_TIMEZONE
 from app.services.monzo import monzo_client_scope
 from app.services.token_crypto import encrypt_token
 from app.services.transfer_execution import execute_scheduled_transfer
+
+_DATETIME_ADAPTER = TypeAdapter(datetime)
+
+
+def _uk_json(value):
+    return _DATETIME_ADAPTER.dump_python(value.astimezone(UK_TIMEZONE), mode="json")
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -328,10 +335,8 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
             {
                 "setup_id": "own-active",
                 "transfer_id": "own-transfer",
-                "scheduled_for": (now + timedelta(days=1))
-                .astimezone(UK_TIMEZONE)
-                .isoformat(),
-                "created_at": now.astimezone(UK_TIMEZONE).isoformat(),
+                "scheduled_for": _uk_json(now + timedelta(days=1)),
+                "created_at": _uk_json(now),
                 "interval": "weekly",
                 "type": "deposit",
                 "amount": 750,
@@ -342,18 +347,14 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
             {
                 "setup_id": "own-active-later",
                 "transfer_id": "own-transfer-later",
-                "scheduled_for": (now + timedelta(days=2))
-                .astimezone(UK_TIMEZONE)
-                .isoformat(),
-                "created_at": (now - timedelta(hours=1))
-                .astimezone(UK_TIMEZONE)
-                .isoformat(),
+                "scheduled_for": _uk_json(now + timedelta(days=2)),
+                "created_at": _uk_json(now - timedelta(hours=1)),
                 "interval": "daily",
                 "type": "withdraw",
                 "amount": 125,
                 "setup_status": "active",
                 "status": "failed",
-                "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
+                "executed_at": _uk_json(now),
             },
         ],
         "total": 2,
